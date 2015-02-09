@@ -50,6 +50,7 @@ DESCRIPTION:
 #include <boost/thread/thread.hpp>
 #include <boost/thread/barrier.hpp>
 #include <boost/shared_ptr.hpp>
+#include <zmq.hpp>
 #include <list>
 #include <string>
 
@@ -130,7 +131,9 @@ struct UHDWorkerData {
 
 class UHDWorker {
     public:
-        UHDWorker () {
+        UHDWorker () : 
+			m_zmqContext(1)
+		{
             running = false;
         }
 
@@ -148,13 +151,21 @@ class UHDWorker {
 
         void process();
 
+		int myStaticDelayUs;
+
 
     private:
+		//methods
+		void SendTick(zmq::socket_t *pSocket);
+
+		// data
         struct UHDWorkerData *uwd;
         bool running;
         boost::thread uhd_thread;
 
         uhd::tx_streamer::sptr myTxStream;
+		zmq::context_t m_zmqContext;
+		uint64_t m_tickSeqNr;
 };
 
 /* This structure is used as initial configuration for OutputUHD */

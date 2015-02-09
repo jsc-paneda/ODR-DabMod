@@ -31,6 +31,7 @@
 #include "PcDebug.h"
 #include "Log.h"
 #include "RemoteControl.h"
+#include "endian_converter.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -40,9 +41,12 @@
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
+#include <boost/chrono.hpp>
 
 using namespace boost;
+using namespace boost::chrono;
 using namespace std;
+using namespace Ofta;
 
 typedef std::complex<float> complexf;
 
@@ -269,7 +273,6 @@ void OutputUHD::SetDelayBuffer(unsigned int dabMode)
     default:
         throw std::runtime_error("OutPutUHD: invalid DAB mode");
     }
-	fprintf(stderr, "DelayBuf = %d\n", myTFDurationMs * myConf.sampleRate / 1000);
 	// The buffer size equals the number of samples per transmission frame so
 	// we calculate it by multiplying the duration of the transmission frame
 	// with the samplerate.
@@ -341,7 +344,7 @@ int OutputUHD::process(Buffer* dataIn, Buffer* dataOut)
             myEtiReader->sourceContainsTimestamp();
 
         // calculate delay
-        uint32_t noSampleDelay = (myStaticDelayUs * myConf.sampleRate / 1000) / 1000;
+        uint32_t noSampleDelay = (myStaticDelayUs * (myConf.sampleRate / 1000)) / 1000;
         uint32_t noByteDelay = noSampleDelay * sizeof(complexf);
 
         uint8_t* pInData = (uint8_t*) dataIn->getData();
@@ -369,6 +372,7 @@ int OutputUHD::process(Buffer* dataIn, Buffer* dataOut)
         }
 
         activebuffer = (activebuffer + 1) % 2;
+		worker.myStaticDelayUs = myStaticDelayUs;
     }
 
     return uwd.bufsize;
@@ -393,6 +397,20 @@ void UHDWorker::process()
 
     // Transmit timeout
     const double timeout = 0.2;
+	
+	zmq::socket_t zmqPub(m_zmqContext, ZMQ_PUB);
+	try {
+        // connect the socket
+        int hwm = 100;
+        int linger = 0;
+        zmqPub.setsockopt(ZMQ_RCVHWM, &hwm, sizeof(hwm));
+        zmqPub.setsockopt(ZMQ_SNDHWM, &hwm, sizeof(hwm));
+        zmqPub.setsockopt(ZMQ_LINGER, &linger, sizeof(linger));
+        //zmqPub.connect(m_endpoint.c_str());
+        zmqPub.bind("tcp://127.0.0.1:9002");
+	}
+	catch (zmq::error_t &e) {
+	}
 
 #if FAKE_UHD == 0
     uhd::stream_args_t stream_args("fc32"); //complex floats
@@ -552,6 +570,10 @@ void UHDWorker::process()
         PDEBUG("UHDWorker::process:max_num_samps: %zu.\n",
                 usrp_max_num_samps);
 
+
+		// send a tick at the start of each transmission frame
+		SendTick(&zmqPub);
+
         while (running && !uwd->muting && (num_acc_samps < sizeIn)) {
             size_t samps_to_send = std::min(sizeIn - num_acc_samps, usrp_max_num_samps);
 
@@ -665,9 +687,81 @@ loopend:
         workerbuffer = (workerbuffer + 1) % 2;
     }
 
+	zmqPub.close();
     uwd->logger->level(warn) << "UHD worker terminated";
 }
 
+void UHDWorker::SendTick(zmq::socket_t *pSocket)
+{
+	uint64_t tickStampNs = 
+		duration_cast<nanoseconds>(high_resolution_clock::now().time_since_epoch()).
+		count() + myStaticDelayUs * 1000 + 34190000;
+
+	posix_time::ptime timestamp(posix_time::microsec_clock::universal_time());
+	posix_time::ptime epoch(boost::gregorian::date(1970, 1, 1));
+	posix_time::time_duration epochDiff = (timestamp - epoch);
+	uint64_t secondsSinceEpoch = epochDiff.total_seconds();
+	uint32_t microSecondsSinceSecond = 
+		epochDiff.total_microseconds() - secondsSinceEpoch * 1000000LL;
+
+	// send the Flytta tick
+	char tag[] = "TICK;odr-dabmod";
+	zmq::message_t msg1(strlen(tag));
+	std::memcpy (msg1.data(), tag, strlen(tag));
+	pSocket->send(msg1, ZMQ_SNDMORE);
+
+	uint8_t version[] = {0, 0, 1, 0};
+	zmq::message_t msg2(4);
+	std::memcpy (msg2.data(), version, 4);
+	pSocket->send(msg2, ZMQ_SNDMORE);
+
+	uint8_t error[] = {0, 0};
+	zmq::message_t msg3(2);
+	std::memcpy (msg3.data(), error, 2);
+	pSocket->send(msg3, ZMQ_SNDMORE);
+
+	uint64_t nboVal64 = endian::HtoN(m_tickSeqNr++);
+	zmq::message_t msg4(sizeof(nboVal64));
+	std::memcpy (msg4.data(), &nboVal64, sizeof(nboVal64));
+	pSocket->send(msg4, ZMQ_SNDMORE);
+
+	uint8_t traceSize = 0;
+	zmq::message_t msg5(1);
+	std::memcpy (msg5.data(), &traceSize, 1);
+	pSocket->send(msg5, ZMQ_SNDMORE);
+
+	uint32_t customSize = 5;
+	uint32_t nboVal32 = endian::HtoN(customSize);
+	zmq::message_t msg6(sizeof(nboVal32));
+	std::memcpy (msg6.data(), &nboVal32, sizeof(nboVal32));
+	pSocket->send(msg6, ZMQ_SNDMORE);
+
+	nboVal64 = endian::HtoN(secondsSinceEpoch);
+	zmq::message_t msg7(sizeof(nboVal64));
+	std::memcpy (msg7.data(), &nboVal64, sizeof(nboVal64));
+	pSocket->send(msg7, ZMQ_SNDMORE);
+
+	nboVal32 = endian::HtoN(microSecondsSinceSecond);
+	zmq::message_t msg8(sizeof(nboVal32));
+	std::memcpy (msg8.data(), &nboVal32, sizeof(nboVal32));
+	pSocket->send(msg8, ZMQ_SNDMORE);
+
+	nboVal64 = endian::HtoN(tickStampNs);
+	zmq::message_t msg9(sizeof(nboVal64));
+	std::memcpy (msg9.data(), &nboVal64, sizeof(nboVal64));
+	pSocket->send(msg9, ZMQ_SNDMORE);
+
+	uint64_t sourceInterval = 96000;
+	nboVal64 = endian::HtoN(sourceInterval);
+	zmq::message_t msg10(sizeof(nboVal64));
+	std::memcpy (msg10.data(), &nboVal64, sizeof(nboVal64));
+	pSocket->send(msg10, ZMQ_SNDMORE);
+
+	uint8_t sourceType = 1;
+	zmq::message_t msg11(1);
+	std::memcpy (msg11.data(), &sourceType, 1);
+	pSocket->send(msg11, 0);
+}
 
 void OutputUHD::set_parameter(const string& parameter, const string& value)
 {
@@ -690,10 +784,10 @@ void OutputUHD::set_parameter(const string& parameter, const string& value)
         int adjust;
         ss >> adjust;
         int newStaticDelayUs = myStaticDelayUs + adjust;
-        if (newStaticDelayUs > myTFDurationMs * 1000)
-            myStaticDelayUs = newStaticDelayUs - myTFDurationMs * 1000;
+        if (newStaticDelayUs > (myTFDurationMs * 1000))
+            myStaticDelayUs = newStaticDelayUs - (myTFDurationMs * 1000);
         else if (newStaticDelayUs < 0)
-            myStaticDelayUs = newStaticDelayUs + myTFDurationMs * 1000;
+            myStaticDelayUs = newStaticDelayUs + (myTFDurationMs * 1000);
         else
             myStaticDelayUs = newStaticDelayUs;
     }
