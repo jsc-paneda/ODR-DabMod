@@ -781,15 +781,23 @@ void OutputUHD::set_parameter(const string& parameter, const string& value)
         ss >> myMuting;
     }
     else if (parameter == "staticdelay") {
-        int adjust;
+        int64_t adjust;
         ss >> adjust;
-        int newStaticDelayUs = myStaticDelayUs + adjust;
-        if (newStaticDelayUs > (myTFDurationMs * 1000))
-            myStaticDelayUs = newStaticDelayUs - (myTFDurationMs * 1000);
-        else if (newStaticDelayUs < 0)
-            myStaticDelayUs = newStaticDelayUs + (myTFDurationMs * 1000);
-        else
-            myStaticDelayUs = newStaticDelayUs;
+		if (adjust > (myTFDurationMs * 1000))
+		{ // reset static delay for values outside range
+			myStaticDelayUs = 0;
+		}
+		else
+		{ // the new adjust value is added to the existing delay and the result
+			// is wrapped around at TF duration
+			int newStaticDelayUs = myStaticDelayUs + adjust;
+			if (newStaticDelayUs > (myTFDurationMs * 1000))
+				myStaticDelayUs = newStaticDelayUs - (myTFDurationMs * 1000);
+			else if (newStaticDelayUs < 0)
+				myStaticDelayUs = newStaticDelayUs + (myTFDurationMs * 1000);
+			else
+				myStaticDelayUs = newStaticDelayUs;
+		}
     }
     else if (parameter == "iqbalance") {
         ss >> myConf.frequency;
