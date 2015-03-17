@@ -386,6 +386,7 @@ void UHDWorker::process()
     double pps_offset = 0;
     double last_pps   = 2.0;
     double usrp_time;
+	bool startFrame;
 
     //const struct timespec hundred_nano = {0, 100};
 
@@ -571,9 +572,7 @@ void UHDWorker::process()
                 usrp_max_num_samps);
 
 
-		// send a tick at the start of each transmission frame
-		SendTick(&zmqPub);
-
+		startFrame = true;
         while (running && !uwd->muting && (num_acc_samps < sizeIn)) {
             size_t samps_to_send = std::min(sizeIn - num_acc_samps, usrp_max_num_samps);
 
@@ -592,6 +591,12 @@ void UHDWorker::process()
             usleep( (1000000 / uwd->sampleRate) * samps_to_send);
             size_t num_tx_samps = samps_to_send;
 #else
+			if (startFrame)
+			{
+				// send a tick at the start of each transmission frame
+				SendTick(&zmqPub);
+				startFrame = false;
+			}
             //send a single packet
             size_t num_tx_samps = myTxStream->send(
                     &in[num_acc_samps],
