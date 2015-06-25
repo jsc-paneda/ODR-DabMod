@@ -700,7 +700,7 @@ void UHDWorker::SendTick(zmq::socket_t *pSocket)
 {
 	uint64_t tickStampNs = 
 		duration_cast<nanoseconds>(high_resolution_clock::now().time_since_epoch()).
-		count() + myStaticDelayUs * 1000 + 34190000;
+		count() + myStaticDelayUs * 1000 + 34283000;
 
 	posix_time::ptime timestamp(posix_time::microsec_clock::universal_time());
 	posix_time::ptime epoch(boost::gregorian::date(1970, 1, 1));
