@@ -125,6 +125,7 @@ AS_IF([test "x$enable_output_uhd" = "xyes"],
 AX_BOOST_BASE([1.41.0], [], AC_MSG_ERROR([BOOST 1.41 or later is required]))
 AC_CHECK_LIB([boost_system], [main], [], [AC_MSG_ERROR([library boost_system is missing])])
 AC_CHECK_LIB([boost_thread], [main], [], [AC_MSG_ERROR([library boost_thread is missing])])
+AC_CHECK_LIB([boost_chrono], [main], [], [AC_MSG_ERROR([library boost_chrono is missing])])
 
 AC_CHECK_LIB([rt], [clock_gettime], [], [AC_MSG_ERROR([library rt is missing])])
 
