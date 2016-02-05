@@ -110,12 +110,13 @@ OfdmGenerator::OfdmGenerator(size_t nbSymbols,
                 "OfdmGenerator::process complexf size is not FFT_TYPE size!");
     }
 #else
-    myFftPlan = kiss_fft_alloc(mySpacing, 1, NULL, NULL);
+    myFftPlan = kiss_fft_alloc(mySpacing, myNbSymbols, NULL, NULL);
     myFftBuffer = (FFT_TYPE*)memalign(16, mySpacing * sizeof(FFT_TYPE));
 #endif
     mb = mbox_open();
 
-    int ret = gpu_fft_prepare(mb, 11 /*log2_N*/, GPU_FFT_REV, 1/*jobs*/, &fft); // call once
+    printf("myNbSymbols%i\n", myNbSymbols);
+    int ret = gpu_fft_prepare(mb, 11 /*log2_N*/, GPU_FFT_REV, myNbSymbols/*jobs*/, &fft); // call once
     switch(ret) {
         case -1: printf("Unable to enable V3D. Please check your firmware is up to date.\n");
         case -2: printf("log2_N=%d not supported.  Try between 8 and 22.\n", N);
@@ -155,6 +156,7 @@ OfdmGenerator::~OfdmGenerator()
     kiss_fft_cleanup();
 #endif
 
+    printf("Mem release\n");
     gpu_fft_release(fft); // Videocore memory lost if not freed !
 }
 
@@ -210,24 +212,28 @@ int OfdmGenerator::process(Buffer* const dataIn, Buffer* dataOut)
     }
     #endif
     //GPU FFT
-    gpuIn = fft->in;
-    gpuOut = fft->out;
     for (size_t i = 0; i < myNbSymbols; ++i) {
-        gpuIn[0].re = 0;
-        gpuIn[0].im = 0;
-
-        bzero(&gpuIn[myZeroDst], myZeroSize * sizeof(GPU_FFT_COMPLEX));
-        memcpy(&gpuIn[myPosDst], &in[myPosSrc],
-                myPosSize * sizeof(GPU_FFT_COMPLEX));
-        memcpy(&gpuIn[myNegDst], &in[myNegSrc],
-                myNegSize * sizeof(GPU_FFT_COMPLEX));
-
-        gpu_fft_execute(fft);
-
-        memcpy(out, gpuOut, mySpacing * sizeof(GPU_FFT_COMPLEX));
-
-        in += myNbCarriers;
-        out += mySpacing;
+      gpuIn = fft->in + i*fft->step;
+          
+      gpuIn[0].re = 0;
+      gpuIn[0].im = 0;
+      
+      bzero(&gpuIn[myZeroDst], myZeroSize * sizeof(GPU_FFT_COMPLEX));
+      memcpy(&gpuIn[myPosDst], &in[myPosSrc],
+      	     myPosSize * sizeof(GPU_FFT_COMPLEX));
+      memcpy(&gpuIn[myNegDst], &in[myNegSrc],
+	     myNegSize * sizeof(GPU_FFT_COMPLEX));
+      
+      in += myNbCarriers;
+    }
+        
+    gpu_fft_execute(fft);
+    
+    for (size_t i = 0; i < myNbSymbols; ++i) {
+      gpuOut = fft->out + i*fft->step;  
+      memcpy(out, gpuOut, mySpacing * sizeof(GPU_FFT_COMPLEX));
+      
+      out += mySpacing;
     }
     //end GPU FFT
 #else
