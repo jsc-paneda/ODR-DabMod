@@ -40,7 +40,10 @@
 #  include "kiss_fftsimd.h"
 #  include <kiss_fft.h>
 #endif
-
+extern "C" {
+#include "gpu_fft.h"
+#include "mailbox.h"
+}
 #include <sys/types.h>
 
 
@@ -64,6 +67,12 @@ protected:
     FFT_PLAN myFftPlan;
     FFT_TYPE *myFftBuffer;
 #endif
+    int mb;
+    struct GPU_FFT_COMPLEX *base;
+    struct GPU_FFT_COMPLEX *gpuIn;
+    struct GPU_FFT_COMPLEX *gpuOut;
+    struct GPU_FFT *fft;
+    
     size_t myNbSymbols;
     size_t myNbCarriers;
     size_t mySpacing;

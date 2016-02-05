@@ -54,6 +54,7 @@ OfdmGenerator::OfdmGenerator(size_t nbSymbols,
 #else
     myFftBuffer(NULL),
 #endif
+    
     myNbSymbols(nbSymbols),
     myNbCarriers(nbCarriers),
     mySpacing(spacing)
@@ -112,7 +113,16 @@ OfdmGenerator::OfdmGenerator(size_t nbSymbols,
     myFftPlan = kiss_fft_alloc(mySpacing, 1, NULL, NULL);
     myFftBuffer = (FFT_TYPE*)memalign(16, mySpacing * sizeof(FFT_TYPE));
 #endif
+    mb = mbox_open();
 
+    int ret = gpu_fft_prepare(mb, 11 /*log2_N*/, GPU_FFT_REV, 1/*jobs*/, &fft); // call once
+    switch(ret) {
+        case -1: printf("Unable to enable V3D. Please check your firmware is up to date.\n");
+        case -2: printf("log2_N=%d not supported.  Try between 8 and 22.\n", N);
+        case -3: printf("Out of memory.  Try a smaller batch or increase GPU memory.\n");
+        case -4: printf("Unable to map Videocore peripherals into ARM memory space.\n");
+        case -5: printf("Can't open libbcm_host.\n");
+    }
 }
 
 
@@ -144,6 +154,8 @@ OfdmGenerator::~OfdmGenerator()
 
     kiss_fft_cleanup();
 #endif
+
+    gpu_fft_release(fft); // Videocore memory lost if not freed !
 }
 
 int OfdmGenerator::process(Buffer* const dataIn, Buffer* dataOut)
@@ -177,6 +189,7 @@ int OfdmGenerator::process(Buffer* const dataIn, Buffer* dataOut)
     }
 
 #if USE_FFTW
+    #if 0
     // No SIMD/no-SIMD distinction, it's too early to optimize anything
     for (size_t i = 0; i < myNbSymbols; ++i) {
         myFftIn[0][0] = 0;
@@ -195,6 +208,28 @@ int OfdmGenerator::process(Buffer* const dataIn, Buffer* dataOut)
         in += myNbCarriers;
         out += mySpacing;
     }
+    #endif
+    //GPU FFT
+    gpuIn = fft->in;
+    gpuOut = fft->out;
+    for (size_t i = 0; i < myNbSymbols; ++i) {
+        gpuIn[0].re = 0;
+        gpuIn[0].im = 0;
+
+        bzero(&gpuIn[myZeroDst], myZeroSize * sizeof(GPU_FFT_COMPLEX));
+        memcpy(&gpuIn[myPosDst], &in[myPosSrc],
+                myPosSize * sizeof(GPU_FFT_COMPLEX));
+        memcpy(&gpuIn[myNegDst], &in[myNegSrc],
+                myNegSize * sizeof(GPU_FFT_COMPLEX));
+
+        gpu_fft_execute(fft);
+
+        memcpy(out, gpuOut, mySpacing * sizeof(GPU_FFT_COMPLEX));
+
+        in += myNbCarriers;
+        out += mySpacing;
+    }
+    //end GPU FFT
 #else
 #  ifdef USE_SIMD
     for (size_t i = 0, j = 0; i < sizeIn; ) {

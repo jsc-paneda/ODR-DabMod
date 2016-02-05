@@ -13,7 +13,7 @@ set(PROJECT_SRCS
 	${KISSFFT_SRC_DIR}/kiss_fft.c
 )
 
-file(GLOB PROJECT_SRCS_AUTO ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
+file(GLOB PROJECT_SRCS_AUTO ${CMAKE_CURRENT_SOURCE_DIR}/*.c*)
 
 file(GLOB PROJECT_HDRS_AUTO ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
 
@@ -41,6 +41,9 @@ endif()
 if (BOOST_STATIC)
 	add_dependencies(${PROJECT_NAME} boost_libs)
 endif()
+
+SET(MY_GCC_LINK_FLAGS "-lrt -lm -ldl")
+SET( CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} ${MY_GCC_LINK_FLAGS}" )
 
 target_link_libraries(${PROJECT_NAME}
 	${ZEROMQ}
