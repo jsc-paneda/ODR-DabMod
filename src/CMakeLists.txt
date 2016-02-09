@@ -54,8 +54,12 @@ if (BOOST_STATIC)
 	add_dependencies(${PROJECT_NAME} boost_libs)
 endif()
 
-SET(MY_GCC_LINK_FLAGS "-lrt -lm -ldl")
-SET( CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} ${MY_GCC_LINK_FLAGS}" )
+if(GPU_FFT)
+	message(STATUS "Adding Linker flags for RPI GPU FFT")
+
+	SET(MY_GCC_LINK_FLAGS "-lrt -lm -ldl")
+	SET( CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} ${MY_GCC_LINK_FLAGS}" )
+endif()
 
 target_link_libraries(${PROJECT_NAME}
 	${ZEROMQ}
