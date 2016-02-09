@@ -123,9 +123,10 @@ OfdmGenerator::OfdmGenerator(size_t nbSymbols,
                 "OfdmGenerator::process complexf size is not FFT_TYPE size!");
     }
 #else
-    myFftPlan = kiss_fft_alloc(mySpacing, myNbSymbols, NULL, NULL);
+    myFftPlan = kiss_fft_alloc(mySpacing, 1, NULL, NULL);
     myFftBuffer = (FFT_TYPE*)memalign(16, mySpacing * sizeof(FFT_TYPE));
 #endif
+
 }
 
 
