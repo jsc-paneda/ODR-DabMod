@@ -39,6 +39,7 @@
 #include <assert.h>
 #include <complex>
 #include <malloc.h>
+#include <cmath>
 typedef std::complex<float> complexf;
 
 
@@ -49,7 +50,9 @@ OfdmGenerator::OfdmGenerator(size_t nbSymbols,
     ModCodec(ModFormat(nbSymbols * nbCarriers * sizeof(FFT_TYPE)),
             ModFormat(nbSymbols * spacing * sizeof(FFT_TYPE))),
     myFftPlan(NULL),
-#if USE_FFTW
+#if USE_GPU_FFT
+    
+#elif USE_FFTW
     myFftIn(NULL), myFftOut(NULL),
 #else
     myFftBuffer(NULL),
@@ -95,7 +98,17 @@ OfdmGenerator::OfdmGenerator(size_t nbSymbols,
     PDEBUG("  myZeroDst: %u\n", myZeroDst);
     PDEBUG("  myZeroSize: %u\n", myZeroSize);
 
-#if USE_FFTW
+#if USE_GPU_FFT
+     mailBox = mbox_open();
+     int ret = gpu_fft_prepare(mailBox, log2(mySpacing) /*log2_N*/, GPU_FFT_REV, myNbSymbols/*jobs*/, &fft); // call once
+     switch(ret) {
+        case -1: printf("Unable to enable V3D. Please check your firmware is up to date.\n");
+        case -2: printf("log2_N=%d not supported.  Try between 8 and 22.\n", log2(mySpacing));
+        case -3: printf("Out of memory.  Try a smaller batch or increase GPU memory.\n");
+        case -4: printf("Unable to map Videocore peripherals into ARM memory space.\n");
+        case -5: printf("Can't open libbcm_host.\n");
+    }
+#elif USE_FFTW
     const int N = mySpacing; // The size of the FFT
     myFftIn = (FFT_TYPE*)fftwf_malloc(sizeof(FFT_TYPE) * N);
     myFftOut = (FFT_TYPE*)fftwf_malloc(sizeof(FFT_TYPE) * N);
@@ -113,17 +126,6 @@ OfdmGenerator::OfdmGenerator(size_t nbSymbols,
     myFftPlan = kiss_fft_alloc(mySpacing, myNbSymbols, NULL, NULL);
     myFftBuffer = (FFT_TYPE*)memalign(16, mySpacing * sizeof(FFT_TYPE));
 #endif
-    mb = mbox_open();
-
-    printf("myNbSymbols%i\n", myNbSymbols);
-    int ret = gpu_fft_prepare(mb, 11 /*log2_N*/, GPU_FFT_REV, myNbSymbols/*jobs*/, &fft); // call once
-    switch(ret) {
-        case -1: printf("Unable to enable V3D. Please check your firmware is up to date.\n");
-        case -2: printf("log2_N=%d not supported.  Try between 8 and 22.\n", N);
-        case -3: printf("Out of memory.  Try a smaller batch or increase GPU memory.\n");
-        case -4: printf("Unable to map Videocore peripherals into ARM memory space.\n");
-        case -5: printf("Can't open libbcm_host.\n");
-    }
 }
 
 
@@ -131,7 +133,9 @@ OfdmGenerator::~OfdmGenerator()
 {
     PDEBUG("OfdmGenerator::~OfdmGenerator() @ %p\n", this);
 
-#if USE_FFTW
+#if USE_GPU_FFT
+    gpu_fft_release(fft); // Videocore memory lost if not freed !
+#elif USE_FFTW
     if (myFftIn) {
          fftwf_free(myFftIn);
     }
@@ -155,9 +159,6 @@ OfdmGenerator::~OfdmGenerator()
 
     kiss_fft_cleanup();
 #endif
-
-    printf("Mem release\n");
-    gpu_fft_release(fft); // Videocore memory lost if not freed !
 }
 
 int OfdmGenerator::process(Buffer* const dataIn, Buffer* dataOut)
@@ -190,28 +191,10 @@ int OfdmGenerator::process(Buffer* const dataIn, Buffer* dataOut)
                 "OfdmGenerator::process output size not valid!");
     }
 
-#if USE_FFTW
-    #if 0
-    // No SIMD/no-SIMD distinction, it's too early to optimize anything
-    for (size_t i = 0; i < myNbSymbols; ++i) {
-        myFftIn[0][0] = 0;
-        myFftIn[0][1] = 0;
+#if USE_GPU_FFT
+    struct GPU_FFT_COMPLEX *gpuIn;
+    struct GPU_FFT_COMPLEX *gpuOut;
 
-        bzero(&myFftIn[myZeroDst], myZeroSize * sizeof(FFT_TYPE));
-        memcpy(&myFftIn[myPosDst], &in[myPosSrc],
-                myPosSize * sizeof(FFT_TYPE));
-        memcpy(&myFftIn[myNegDst], &in[myNegSrc],
-                myNegSize * sizeof(FFT_TYPE));
-
-        fftwf_execute(myFftPlan);
-
-        memcpy(out, myFftOut, mySpacing * sizeof(FFT_TYPE));
-
-        in += myNbCarriers;
-        out += mySpacing;
-    }
-    #endif
-    //GPU FFT
     for (size_t i = 0; i < myNbSymbols; ++i) {
       gpuIn = fft->in + i*fft->step;
           
@@ -235,7 +218,25 @@ int OfdmGenerator::process(Buffer* const dataIn, Buffer* dataOut)
       
       out += mySpacing;
     }
-    //end GPU FFT
+#elif USE_FFTW
+    // No SIMD/no-SIMD distinction, it's too early to optimize anything
+    for (size_t i = 0; i < myNbSymbols; ++i) {
+        myFftIn[0][0] = 0;
+        myFftIn[0][1] = 0;
+
+        bzero(&myFftIn[myZeroDst], myZeroSize * sizeof(FFT_TYPE));
+        memcpy(&myFftIn[myPosDst], &in[myPosSrc],
+                myPosSize * sizeof(FFT_TYPE));
+        memcpy(&myFftIn[myNegDst], &in[myNegSrc],
+                myNegSize * sizeof(FFT_TYPE));
+
+        fftwf_execute(myFftPlan);
+
+        memcpy(out, myFftOut, mySpacing * sizeof(FFT_TYPE));
+
+        in += myNbCarriers;
+        out += mySpacing;
+    }
 #else
 #  ifdef USE_SIMD
     for (size_t i = 0, j = 0; i < sizeIn; ) {

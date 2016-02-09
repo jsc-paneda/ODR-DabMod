@@ -76,6 +76,13 @@ if (FFTW3)
 	message(STATUS "Uses FFTW3")
 	include(${CMAKE_INCLUDE_DIR}/fftw.txt) 
 endif()
+
+option(GPU_FFT "Uses RPI GPU for FFT" OFF)
+if(GPU_FFT)
+	message(STATUS "Uses RPI GPU for FFT")
+	ADD_DEFINITIONS(-DUSE_GPU_FFT)
+	include_directories("/opt/vc/src/hello_pi/hello_fft")
+endif()
 ### FFT ###
 
 message ("")

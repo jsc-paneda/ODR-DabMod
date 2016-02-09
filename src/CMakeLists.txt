@@ -13,7 +13,19 @@ set(PROJECT_SRCS
 	${KISSFFT_SRC_DIR}/kiss_fft.c
 )
 
-file(GLOB PROJECT_SRCS_AUTO ${CMAKE_CURRENT_SOURCE_DIR}/*.c*)
+if(GPU_FFT)
+	message(STATUS "Adding sources for RPI GPU FFT")
+	set(PROJECT_SRCS 
+		${PROJECT_SRCS}
+		/opt/vc/src/hello_pi/hello_fft/mailbox.c
+		/opt/vc/src/hello_pi/hello_fft/gpu_fft.c
+		/opt/vc/src/hello_pi/hello_fft/gpu_fft_base.c
+		/opt/vc/src/hello_pi/hello_fft/gpu_fft_twiddles.c
+		/opt/vc/src/hello_pi/hello_fft/gpu_fft_shaders.c
+	)
+endif()
+
+file(GLOB PROJECT_SRCS_AUTO ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 
 file(GLOB PROJECT_HDRS_AUTO ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
 

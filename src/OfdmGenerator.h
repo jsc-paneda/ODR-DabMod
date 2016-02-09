@@ -34,16 +34,18 @@
 #include "porting.h"
 #include "ModCodec.h"
 
-#if USE_FFTW
+#if USE_GPU_FFT
+extern "C" {
+#  include "gpu_fft.h"
+#  include "mailbox.h"
+}
+#elif USE_FFTW
 #  include "fftw3.h"
 #else
 #  include "kiss_fftsimd.h"
 #  include <kiss_fft.h>
 #endif
-extern "C" {
-#include "gpu_fft.h"
-#include "mailbox.h"
-}
+
 #include <sys/types.h>
 
 
@@ -60,18 +62,17 @@ public:
     const char* name() { return "OfdmGenerator"; }
 
 protected:
-#if USE_FFTW
+#if USE_GPU_FFT
+    int mailBox;
+    struct GPU_FFT *fft;
+    void* myFftPlan;
+#elif USE_FFTW
     fftwf_plan myFftPlan;
     fftwf_complex *myFftIn, *myFftOut;
 #else
     FFT_PLAN myFftPlan;
     FFT_TYPE *myFftBuffer;
 #endif
-    int mb;
-    struct GPU_FFT_COMPLEX *base;
-    struct GPU_FFT_COMPLEX *gpuIn;
-    struct GPU_FFT_COMPLEX *gpuOut;
-    struct GPU_FFT *fft;
     
     size_t myNbSymbols;
     size_t myNbCarriers;
