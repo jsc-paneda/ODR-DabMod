@@ -3,6 +3,6 @@
 if(WIN32)
 	SET(OS_LIBS ws2_32)
 else()
-	SET(OS_LIBS pthread ld)
+	SET(OS_LIBS pthread dl)
 endif()
 ##############
