@@ -3,7 +3,7 @@
    Her Majesty the Queen in Right of Canada (Communications Research
    Center Canada)
 
-   Copyright (C), 2014, Matthias P. Braendli, matthias.braendli@mpb.li
+   Copyright (C), 2016, Matthias P. Braendli, matthias.braendli@mpb.li
  */
 /*
    This file is part of ODR-DabMod.
@@ -39,14 +39,17 @@
 #include <stdexcept>
 #include <string>
 #include <map>
+#include <mutex>
+#include <thread>
+#include <boost/lockfree/spsc_queue.hpp>
 
 #define SYSLOG_IDENT "ODR-DabMod"
 #define SYSLOG_FACILITY LOG_LOCAL0
 
-enum log_level_t {debug = 0, info, warn, error, alert, emerg};
+enum log_level_t {debug = 0, info, warn, error, alert, emerg, trace};
 
-const std::string levels_as_str[] =
-    { "     ", "     ", "WARN ", "ERROR", "ALERT", "EMERG"} ;
+static const std::string levels_as_str[] =
+    { "     ", "     ", "WARN ", "ERROR", "ALERT", "EMERG", "TRACE"} ;
 
 /** Abstract class all backends must inherit from */
 class LogBackend {
@@ -71,21 +74,27 @@ class LogToSyslog : public LogBackend {
 
             int syslog_level = LOG_EMERG;
             switch (level) {
+                case trace: break; // Do not handle TRACE in syslog
                 case debug: syslog_level = LOG_DEBUG; break;
-                case alert: syslog_level = LOG_ALERT; break;
                 case info:  syslog_level = LOG_INFO; break;
+                /* we don't have the notice level */
                 case warn:  syslog_level = LOG_WARNING; break;
                 case error: syslog_level = LOG_ERR; break;
+                default:    syslog_level = LOG_CRIT; break;
+                case alert: syslog_level = LOG_ALERT; break;
                 case emerg: syslog_level = LOG_EMERG; break;
             }
 
             syslog(syslog_level, SYSLOG_IDENT " %s", message.c_str());
         }
 
-        std::string get_name() { return name; };
+        std::string get_name() { return name; }
 
     private:
         std::string name;
+
+        LogToSyslog(const LogToSyslog& other) = delete;
+        const LogToSyslog& operator=(const LogToSyslog& other) = delete;
 };
 
 class LogToFile : public LogBackend {
@@ -106,29 +115,67 @@ class LogToFile : public LogBackend {
             }
         }
 
-        void log(log_level_t level, std::string message) {
+        void log(log_level_t level, std::string message);
 
-            const char* log_level_text[] =
-                {"DEBUG", "INFO", "WARN", "ERROR", "ALERT", "EMERG"};
-
-            // fprintf is thread-safe
-            fprintf(log_file, SYSLOG_IDENT ": %s: %s\n",
-                    log_level_text[(size_t)level], message.c_str());
-            fflush(log_file);
-        }
-
-        std::string get_name() { return name; };
+        std::string get_name() { return name; }
 
     private:
         std::string name;
         FILE* log_file;
+
+        LogToFile(const LogToFile& other) = delete;
+        const LogToFile& operator=(const LogToFile& other) = delete;
+};
+
+class LogTracer : public LogBackend {
+    public:
+        LogTracer(const std::string& filename);
+
+        ~LogTracer() {
+            if (m_trace_file != NULL) {
+                fclose(m_trace_file);
+            }
+        }
+
+        void log(log_level_t level, std::string message);
+        std::string get_name() { return name; }
+    private:
+        std::string name;
+        uint64_t m_trace_micros_startup;
+        FILE* m_trace_file;
+
+        LogTracer(const LogTracer& other) = delete;
+        const LogTracer& operator=(const LogTracer& other) = delete;
 };
 
 class LogLine;
 
+struct log_message_t {
+    log_message_t(log_level_t _level, std::string _message) :
+        level(_level),
+        message(_message) {}
+
+    log_message_t() {}
+
+    log_level_t level;
+    std::string message;
+};
+
 class Logger {
     public:
-        Logger() {};
+        Logger() {
+            m_io_thread = std::thread(&Logger::io_process, this);
+        }
+
+        Logger(const Logger& other) = delete;
+        const Logger& operator=(const Logger& other) = delete;
+        ~Logger() {
+            // Special message to stop the thread
+            log_message_t m(debug, "");
+
+            m_message_queue.push(m);
+            m_io_thread.join();
+        }
 
         void register_backend(LogBackend* backend);
 
@@ -137,12 +184,21 @@ class Logger {
 
         void logstr(log_level_t level, std::string message);
 
+        /* All logging IO is done in another thread */
+        void io_process(void);
+
         /* Return a LogLine for the given level
          * so that you can write etiLog.level(info) << "stuff = " << 21 */
         LogLine level(log_level_t level);
 
     private:
         std::list<LogBackend*> backends;
+
+        boost::lockfree::spsc_queue<
+            log_message_t,
+            boost::lockfree::capacity<80> > m_message_queue;
+        std::thread m_io_thread;
+        std::mutex m_cerr_mutex;
 };
 
 extern Logger etiLog;
@@ -152,6 +208,7 @@ extern Logger etiLog;
 class LogLine {
     public:
         LogLine(const LogLine& logline);
+        const LogLine& operator=(const LogLine& other) = delete;
         LogLine(Logger* logger, log_level_t level) :
             logger_(logger)
         {

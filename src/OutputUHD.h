@@ -2,7 +2,7 @@
    Copyright (C) 2005, 2006, 2007, 2008, 2009, 2010 Her Majesty the
    Queen in Right of Canada (Communications Research Center Canada)
 
-   Copyright (C) 2014, 2015
+   Copyright (C) 2016
    Matthias P. Braendli, matthias.braendli@mpb.li
 
     http://opendigitalradio.org
@@ -47,9 +47,9 @@ DESCRIPTION:
 #include <uhd/utils/thread_priority.hpp>
 #include <uhd/utils/safe_main.hpp>
 #include <uhd/usrp/multi_usrp.hpp>
-#include <boost/thread/thread.hpp>
-#include <boost/thread/barrier.hpp>
-#include <list>
+#include <boost/thread.hpp>
+#include <deque>
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -58,6 +58,7 @@ DESCRIPTION:
 #include "EtiReader.h"
 #include "TimestampDecoder.h"
 #include "RemoteControl.h"
+#include "ThreadsafeQueue.h"
 
 #include <stdio.h>
 #include <sys/types.h>
@@ -73,49 +74,39 @@ DESCRIPTION:
 // frames are too far in the future
 #define TIMESTAMP_MARGIN_FUTURE 0.5
 
+// Maximum number of frames that can wait in uwd.frames
+#define FRAMES_MAX_SIZE 2
+
 typedef std::complex<float> complexf;
 
+// Each frame contains one OFDM frame, and its
+// associated timestamp
 struct UHDWorkerFrameData {
     // Buffer holding frame data
-    void* buf;
+    std::vector<uint8_t> buf;
 
-    // Full timestamp
+    // A full timestamp contains a TIST according to standard
+    // and time information within MNSC with tx_second.
     struct frame_timestamp ts;
-};
-
-struct fct_discontinuity_error : public std::exception
-{
-  const char* what () const throw ()
-  {
-    return "FCT discontinuity detected";
-  }
 };
 
 enum refclk_lock_loss_behaviour_t { CRASH, IGNORE };
 
 struct UHDWorkerData {
     bool running;
-    bool failed_due_to_fct;
 
 #if FAKE_UHD == 0
     uhd::usrp::multi_usrp::sptr myUsrp;
 #endif
     unsigned sampleRate;
 
-    // Double buffering between the two threads
-    // Each buffer contains one OFDM frame, and it's
-    // associated timestamp
-    // A full timestamp contains a TIST according to standard
-    // and time information within MNSC with tx_second.
     bool sourceContainsTimestamp;
 
     // When working with timestamps, mute the frames that
     // do not have a timestamp
     bool muteNoTimestamps;
 
-    struct UHDWorkerFrameData frame0;
-    struct UHDWorkerFrameData frame1;
-    size_t bufsize; // in bytes
+    ThreadsafeQueue<UHDWorkerFrameData> frames;
 
     // If we want to verify loss of refclk
     bool check_refclk_loss;
@@ -128,26 +119,19 @@ struct UHDWorkerData {
     // muting set by remote control
     bool muting;
 
-    // A barrier to synchronise the two threads
-    std::shared_ptr<boost::barrier> sync_barrier;
-
     // What to do when the reference clock PLL loses lock
     refclk_lock_loss_behaviour_t refclk_lock_loss_behaviour;
-
-    // What transmission mode we're using defines by how
-    // much the FCT should increment for each
-    // transmission frame.
-    int fct_increment;
 };
 
 
 class UHDWorker {
     public:
-        void start(struct UHDWorkerData *uhdworkerdata) {
+        UHDWorker(struct UHDWorkerData *uhdworkerdata) {
             uwd = uhdworkerdata;
+        }
 
+        void start(struct UHDWorkerData *uhdworkerdata) {
             uwd->running = true;
-            uwd->failed_due_to_fct = false;
             uhd_thread = boost::thread(&UHDWorker::process_errhandler, this);
         }
 
@@ -159,22 +143,30 @@ class UHDWorker {
             uhd_thread.join();
         }
 
+        ~UHDWorker() {
+            stop();
+        }
+
+        UHDWorker(const UHDWorker& other) = delete;
+        UHDWorker& operator=(const UHDWorker& other) = delete;
+
     private:
         // Asynchronous message statistics
         int num_underflows;
         int num_late_packets;
 
-        bool fct_discontinuity;
-        int expected_next_fct;
         uhd::tx_metadata_t md;
-        time_t tx_second;
-        double pps_offset;
-        double last_pps;
+        bool     last_tx_time_initialised;
+        uint32_t last_tx_second;
+        uint32_t last_tx_pps;
+
+        // Used to print statistics once a second
+        std::chrono::steady_clock::time_point last_print_time;
 
         void print_async_metadata(const struct UHDWorkerFrameData *frame);
 
         void handle_frame(const struct UHDWorkerFrameData *frame);
-        void tx_frame(const struct UHDWorkerFrameData *frame);
+        void tx_frame(const struct UHDWorkerFrameData *frame, bool ts_update);
 
         struct UHDWorkerData *uwd;
         boost::thread uhd_thread;
@@ -234,9 +226,7 @@ class OutputUHD: public ModOutput, public RemoteControllable {
 
         const char* name() { return "OutputUHD"; }
 
-        void setETIReader(EtiReader *etiReader) {
-            myEtiReader = etiReader;
-        }
+        void setETIReader(EtiReader *etiReader);
 
         /*********** REMOTE CONTROL ***************/
         /* virtual void enrol_at(BaseRemoteController& controller)
@@ -253,18 +243,17 @@ class OutputUHD: public ModOutput, public RemoteControllable {
 
 
     protected:
-        OutputUHD(const OutputUHD& other);
-        OutputUHD& operator=(const OutputUHD& other);
+        OutputUHD(const OutputUHD& other) = delete;
+        OutputUHD& operator=(const OutputUHD& other) = delete;
 
         EtiReader *myEtiReader;
         OutputUHDConfig& myConf;
         uhd::usrp::multi_usrp::sptr myUsrp;
         std::shared_ptr<boost::barrier> mySyncBarrier;
-        UHDWorker worker;
         bool first_run;
         bool gps_fix_verified;
         struct UHDWorkerData uwd;
-        int activebuffer;
+        UHDWorker worker;
 
     private:
         // Resize the internal delay buffer according to the dabMode and

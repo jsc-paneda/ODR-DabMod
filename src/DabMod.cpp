@@ -105,13 +105,14 @@ struct modulator_data
     RemoteControllers* rcs;
 };
 
-enum run_modulator_state {
-    MOD_FAILURE,
-    MOD_NORMAL_END,
-    MOD_AGAIN
+enum class run_modulator_state_t {
+    failure,    // Corresponds to all failures
+    normal_end, // Number of frames to modulate was reached
+    again,      // ZeroMQ overrun
+    reconfigure // Some sort of change of configuration we cannot handle happened
 };
 
-run_modulator_state run_modulator(modulator_data& m);
+run_modulator_state_t run_modulator(modulator_data& m);
 
 int launch_modulator(int argc, char* argv[])
 {
@@ -164,7 +165,7 @@ int launch_modulator(int argc, char* argv[])
     unsigned tist_delay_stages = 0;
     double   tist_offset_s = 0.0;
 
-    shared_ptr<Flowgraph> flowgraph(new Flowgraph());
+    auto flowgraph = make_shared<Flowgraph>();
     shared_ptr<FormatConverter> format_converter;
     shared_ptr<ModOutput> output;
 
@@ -174,7 +175,7 @@ int launch_modulator(int argc, char* argv[])
 
     InputFileReader inputFileReader;
 #if defined(HAVE_ZEROMQ)
-    shared_ptr<InputZeroMQReader> inputZeroMQReader(new InputZeroMQReader());
+    auto inputZeroMQReader = make_shared<InputZeroMQReader>();
 #endif
 
     struct sigaction sa;
@@ -290,18 +291,6 @@ int launch_modulator(int argc, char* argv[])
 #endif
             << std::endl;
 
-    std::cerr << "Using FFT library " <<
-#if defined(USE_FFTW)
-        "FFTW" <<
-#endif
-#if defined(USE_KISS_FFT)
-        "Kiss FFT" <<
-#endif
-#if defined(USE_SIMD)
-        " (with fft_simd)" <<
-#endif
-        "\n";
-
     std::cerr << "Compiled with features: " <<
 #if defined(HAVE_ZEROMQ)
         "zeromq " <<
@@ -403,6 +392,12 @@ int launch_modulator(int argc, char* argv[])
 
             LogToFile* log_file = new LogToFile(logfilename);
             etiLog.register_backend(log_file);
+        }
+
+        auto trace_filename = pt.get<std::string>("log.trace", "");
+        if (not trace_filename.empty()) {
+            LogTracer* tracer = new LogTracer(trace_filename);
+            etiLog.register_backend(tracer);
         }
 
 
@@ -756,6 +751,11 @@ int launch_modulator(int argc, char* argv[])
     }
 #endif
 
+    // Set thread priority to realtime
+    if (int r = set_realtime_prio(1)) {
+        etiLog.level(error) << "Could not set priority for modulator:" << r;
+    }
+    set_thread_name("modulator");
 
     while (run_again) {
         Flowgraph flowgraph;
@@ -786,15 +786,16 @@ int launch_modulator(int argc, char* argv[])
 
         m.inputReader->PrintInfo();
 
-        run_modulator_state st = run_modulator(m);
+        run_modulator_state_t st = run_modulator(m);
+        etiLog.log(trace, "DABMOD,run_modulator() = %d", st);
 
         switch (st) {
-            case MOD_FAILURE:
+            case run_modulator_state_t::failure:
                 etiLog.level(error) << "Modulator failure.";
                 run_again = false;
                 ret = 1;
                 break;
-            case MOD_AGAIN:
+            case run_modulator_state_t::again:
                 etiLog.level(warn) << "Restart modulator.";
                 run_again = false;
                 if (inputTransport == "file") {
@@ -816,7 +817,12 @@ int launch_modulator(int argc, char* argv[])
 #endif
                 }
                 break;
-            case MOD_NORMAL_END:
+            case run_modulator_state_t::reconfigure:
+                etiLog.level(warn) << "Detected change in ensemble configuration.";
+                /* We can keep the input in this care */
+                run_again = true;
+                break;
+            case run_modulator_state_t::normal_end:
             default:
                 etiLog.level(info) << "modulator stopped.";
                 ret = 0;
@@ -839,9 +845,9 @@ int launch_modulator(int argc, char* argv[])
     return ret;
 }
 
-run_modulator_state run_modulator(modulator_data& m)
+run_modulator_state_t run_modulator(modulator_data& m)
 {
-    run_modulator_state ret = MOD_FAILURE;
+    auto ret = run_modulator_state_t::failure;
     try {
         while (running) {
 
@@ -879,21 +885,21 @@ run_modulator_state run_modulator(modulator_data& m)
                 etiLog.level(error) << "Input read error.";
             }
             running = 0;
-            ret = MOD_NORMAL_END;
+            ret = run_modulator_state_t::normal_end;
         }
-#if defined(HAVE_OUTPUT_UHD)
-    } catch (fct_discontinuity_error& e) {
-        // The OutputUHD saw a FCT discontinuity
-        etiLog.level(warn) << e.what();
-        ret = MOD_AGAIN;
-#endif
     } catch (zmq_input_overflow& e) {
         // The ZeroMQ input has overflowed its buffer
         etiLog.level(warn) << e.what();
-        ret = MOD_AGAIN;
+        ret = run_modulator_state_t::again;
+    } catch (std::out_of_range& e) {
+        // One of the DSP blocks has detected an invalid change
+        // or value in some settings. This can be due to a multiplex
+        // reconfiguration.
+        etiLog.level(warn) << e.what();
+        ret = run_modulator_state_t::reconfigure;
     } catch (std::exception& e) {
         etiLog.level(error) << "Exception caught: " << e.what();
-        ret = MOD_FAILURE;
+        ret = run_modulator_state_t::failure;
     }
 
     return ret;

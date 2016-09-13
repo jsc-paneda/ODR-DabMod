@@ -27,6 +27,8 @@
 
 #include "Utils.h"
 #include "GainControl.h"
+#include <sys/prctl.h>
+#include <pthread.h>
 
 void printWelcome()
 {
@@ -115,12 +117,22 @@ void printVersion(void)
             "    You should have received a copy of the GNU General Public License along\n"
             "    with ODR-DabMod.  If not, see <http://www.gnu.org/licenses/>.\n"
             "\n"
-#if USE_KISS_FFT
-            "ODR-DabMod makes use of the following open source packages:\n"
-            "    Kiss FFT v1.2.9 (Revised BSD) - http://kissfft.sourceforge.net/\n"
-#endif
            );
 
 }
 
+int set_realtime_prio(int prio)
+{
+    // Set thread priority to realtime
+    const int policy = SCHED_RR;
+    sched_param sp;
+    sp.sched_priority = sched_get_priority_min(policy) + prio;
+    int ret = pthread_setschedparam(pthread_self(), policy, &sp);
+    return ret;
+}
+
+void set_thread_name(const char *name)
+{
+    prctl(PR_SET_NAME,name,0,0,0);
+}
 

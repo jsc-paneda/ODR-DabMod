@@ -40,6 +40,7 @@
 #include "porting.h"
 #include "InputReader.h"
 #include "PcDebug.h"
+#include "Utils.h"
 
 #define NUM_FRAMES_PER_ZMQ_MESSAGE 4
 /* A concatenation of four ETI frames,
@@ -62,7 +63,7 @@ struct zmq_dab_message_t
     uint8_t  buf[NUM_FRAMES_PER_ZMQ_MESSAGE*6144];
 };
 
-int InputZeroMQReader::Open(const std::string& uri, unsigned max_queued_frames)
+int InputZeroMQReader::Open(const std::string& uri, size_t max_queued_frames)
 {
     // The URL might start with zmq+tcp://
     if (uri.substr(0, 4) == "zmq+") {
@@ -96,11 +97,14 @@ int InputZeroMQReader::GetNextFrame(void* buffer)
      */
     if (in_messages_.size() < 4) {
         const size_t prebuffering = 10;
+        etiLog.log(trace, "ZMQ,wait1");
         in_messages_.wait_and_pop(incoming, prebuffering);
     }
     else {
+        etiLog.log(trace, "ZMQ,wait2");
         in_messages_.wait_and_pop(incoming);
     }
+    etiLog.log(trace, "ZMQ,pop");
 
     if (not worker_.is_running()) {
         throw zmq_input_overflow();
@@ -121,6 +125,7 @@ void InputZeroMQReader::PrintInfo()
 
 void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
 {
+    set_thread_name("zmqinput");
     size_t queue_size = 0;
 
     bool buffer_full = false;
@@ -183,6 +188,7 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                         offset += framesize;
 
                         queue_size = workerdata->in_messages->push(buf);
+                        etiLog.log(trace, "ZMQ,push %zu", queue_size);
                     }
                 }
             }
