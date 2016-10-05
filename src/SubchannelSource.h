@@ -40,9 +40,10 @@ protected:
     size_t d_start_address;
     size_t d_framesize;
     size_t d_protection;
+	size_t d_scid;
     Buffer d_buffer;
     std::vector<PuncturingRule*> d_puncturing_rules;
-    
+
 public:
     SubchannelSource(eti_STC &stc);
     SubchannelSource(const SubchannelSource&);
@@ -58,7 +59,8 @@ public:
     size_t protectionLevel();
     size_t protectionOption();
     const std::vector<PuncturingRule*>& get_rules();
-    
+	size_t scid();
+
     int process(Buffer* inputData, Buffer* outputData);
     const char* name() { return "SubchannelSource"; }
     int read(Buffer* outputData);

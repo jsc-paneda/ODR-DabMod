@@ -139,6 +139,7 @@ void DabModulator::setMode(unsigned mode)
 }
 
 
+std::vector<std::shared_ptr<SubchannelSource> > oldSubChannels;
 int DabModulator::process(Buffer* const dataIn, Buffer* dataOut)
 {
     using namespace std;
@@ -161,6 +162,7 @@ int DabModulator::process(Buffer* const dataIn, Buffer* dataOut)
         // CIF data initialisation
         ////////////////////////////////////////////////////////////////
         auto cifPrbs = make_shared<PrbsGenerator>(864 * 8, 0x110);
+
         auto cifMux = make_shared<FrameMultiplexer>(
                 myFicSizeOut + 864 * 8, &myEtiReader.getSubchannels());
 
@@ -276,6 +278,37 @@ int DabModulator::process(Buffer* const dataIn, Buffer* dataOut)
         ////////////////////////////////////////////////////////////////
         std::vector<shared_ptr<SubchannelSource> > subchannels =
             myEtiReader.getSubchannels();
+
+		// make test for config change, if so, exit as odrmod do not support
+		// re-configurations
+		if (!oldSubChannels.empty()) {
+			if (subchannels.size() != oldSubChannels.size()) {
+				PDEBUG("ERROR: Multiplex re-configuration detected, exiting..\n");
+				exit(-1);
+			}
+
+			for (const auto& subchannel : subchannels) {
+				bool found = false;
+				for (const auto& oldSubChannel : oldSubChannels) {
+					if (oldSubChannel->scid() == subchannel->scid())
+					{
+						found = true;
+						if (oldSubChannel->startAddress() != subchannel->startAddress() ||
+								oldSubChannel->bitrate() != subchannel->bitrate() ||
+								oldSubChannel->protection() != subchannel->protection()) {
+							PDEBUG("ERROR: Multiplex re-configuration detected, exiting..\n");
+							exit(-1);
+						}
+						break;
+					}
+				}
+				if (!found) {
+					PDEBUG("ERROR: Multiplex re-configuration detected, exiting..\n");
+					exit(-1);
+				}
+			}
+		}
+
         for (const auto& subchannel : subchannels) {
 
             ////////////////////////////////////////////////////////////
@@ -333,6 +366,7 @@ int DabModulator::process(Buffer* const dataIn, Buffer* dataOut)
             myFlowgraph->connect(subchPunc, subchInterleaver);
             myFlowgraph->connect(subchInterleaver, cifMux);
         }
+		oldSubChannels = subchannels;
 
         myFlowgraph->connect(cifMux, cifPart);
         myFlowgraph->connect(cifPart, cifMap);
