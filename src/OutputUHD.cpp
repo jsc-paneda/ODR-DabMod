@@ -767,6 +767,7 @@ void UHDWorker::handle_frame(const struct UHDWorkerFrameData *frame)
                     "%d underruns and %d late packets since last status.\n",
                     usrp_time,
                     num_underflows, num_late_packets);
+			boost::this_thread::sleep(boost::posix_time::milliseconds(20));
         }
         num_underflows = 0;
         num_late_packets = 0;
@@ -866,7 +867,7 @@ void UHDWorker::print_async_metadata(const struct UHDWorkerFrameData *frame)
 
         if (failure) {
             etiLog.level(alert) << "Near frame " <<
-                frame->ts.fct << ": Received Async UHD Message '" << 
+                frame->ts.fct << ": Received Async UHD Message '" <<
                 uhd_async_message << "'";
 
         }
