@@ -767,7 +767,7 @@ void UHDWorker::handle_frame(const struct UHDWorkerFrameData *frame)
                     "%d underruns and %d late packets since last status.\n",
                     usrp_time,
                     num_underflows, num_late_packets);
-			boost::this_thread::sleep(boost::posix_time::milliseconds(20));
+			boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
         }
         num_underflows = 0;
         num_late_packets = 0;
