@@ -154,6 +154,7 @@ class UHDWorker {
         // Asynchronous message statistics
         int num_underflows;
         int num_late_packets;
+        int num_consecutive_underflow_msgs;
 
         uhd::tx_metadata_t md;
         bool     last_tx_time_initialised;
