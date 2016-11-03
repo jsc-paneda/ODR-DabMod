@@ -134,19 +134,28 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
     // zmq sockets are not thread safe. That's why
     // we create it here, and not at object creation.
 
-    const int hwm = 1;
+    const int hwm = 5;
     const int linger = 0;
     try {
-	     subscriber.setsockopt(ZMQ_RCVHWM, &hwm, sizeof(hwm));
-		  subscriber.setsockopt(ZMQ_SNDHWM, &hwm, sizeof(hwm));
-		  subscriber.setsockopt(ZMQ_LINGER, &linger, sizeof(linger));
+        subscriber.setsockopt(ZMQ_RCVHWM, &hwm, sizeof(hwm));
+        subscriber.setsockopt(ZMQ_SNDHWM, &hwm, sizeof(hwm));
+        subscriber.setsockopt(ZMQ_LINGER, &linger, sizeof(linger));
         subscriber.connect(workerdata->uri.c_str());
         subscriber.setsockopt(ZMQ_SUBSCRIBE, NULL, 0); // subscribe to all messages
 
+        bool startup = true;
+        size_t throwFrames = 25;
         while (running)
         {
             zmq::message_t incoming;
             subscriber.recv(&incoming);
+
+            if(startup && (throwFrames > 0))
+            {   // Drop first 25 frames received. 
+                // It is most likely old frames from senders HWM-buffer.
+                --throwFrames;
+                continue;
+            }
 
             if (m_to_drop) {
                 queue_size = workerdata->in_messages->size();
