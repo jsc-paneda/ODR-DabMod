@@ -619,6 +619,7 @@ void UHDWorker::process()
 
     num_underflows   = 0;
     num_late_packets = 0;
+	num_consecutive_underflow_msgs = 0;
 
     while (uwd->running) {
         md.has_time_spec  = false;
@@ -768,7 +769,7 @@ void UHDWorker::handle_frame(const struct UHDWorkerFrameData *frame)
                     usrp_time,
                     num_underflows, num_late_packets);
 
-			if(++num_consecutive_underflow_msgs > 10)
+			if(++num_consecutive_underflow_msgs > 25)
 			{
 				num_consecutive_underflow_msgs = 0;
 				//boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
