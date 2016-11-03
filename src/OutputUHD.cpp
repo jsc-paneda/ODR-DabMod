@@ -771,7 +771,8 @@ void UHDWorker::handle_frame(const struct UHDWorkerFrameData *frame)
 			if(++num_consecutive_underflow_msgs > 10)
 			{
 				num_consecutive_underflow_msgs = 0;
-				boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
+				//boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
+				throw std::runtime_error("Too many consecutive underruns. Indicates unspecified internal problem, exiting...");
 			}
         }
 		else
