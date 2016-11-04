@@ -134,7 +134,7 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
     // zmq sockets are not thread safe. That's why
     // we create it here, and not at object creation.
 
-    const int hwm = 50;
+    const int hwm = 30;
     const int linger = 0;
     try {
         subscriber.setsockopt(ZMQ_RCVHWM, &hwm, sizeof(hwm));
@@ -143,7 +143,7 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
         subscriber.connect(workerdata->uri.c_str());
         subscriber.setsockopt(ZMQ_SUBSCRIBE, NULL, 0); // subscribe to all messages
 
-        size_t throwFrames = 20;
+        size_t throwFrames = 0;
         while (running)
         {
             zmq::message_t incoming;
