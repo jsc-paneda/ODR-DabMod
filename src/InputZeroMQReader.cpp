@@ -220,7 +220,6 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                     //throw std::runtime_error("ZMQ input full");
                 }
 
-				workerdata->in_messages->clear();
                 queue_size = workerdata->in_messages->size();
 
                 /* Drop three more incoming ETI frames before
@@ -228,8 +227,8 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                  * that we keep transmission frame vs. ETI frame
                  * phase.
                  */
-                // m_to_drop = 3;
-                //m_to_drop = workerdata->max_queued_frames / 2;
+                //m_to_drop = 3;
+                m_to_drop = workerdata->max_queued_frames / 2;
 
             }
 
