@@ -143,18 +143,18 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
         subscriber.connect(workerdata->uri.c_str());
         subscriber.setsockopt(ZMQ_SUBSCRIBE, NULL, 0); // subscribe to all messages
 
-        // size_t throwFrames = 50;
+        size_t throwFrames = 25;
         while (running)
         {
             zmq::message_t incoming;
             subscriber.recv(&incoming);
 
-            // if(throwFrames > 0)
-            // {   // Drop first throwFrames number of frames received. 
-                // // It is most likely old frames from frame source HWM-buffer.
-                // --throwFrames;
-                // continue;
-            // }
+            if(throwFrames > 0)
+            {   // Drop first throwFrames number of frames received. 
+                // It is most likely old frames from frame source HWM-buffer.
+                --throwFrames;
+                continue;
+            }
 
             if (m_to_drop) {
                 queue_size = workerdata->in_messages->size();
