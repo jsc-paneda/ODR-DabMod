@@ -134,7 +134,7 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
     // zmq sockets are not thread safe. That's why
     // we create it here, and not at object creation.
 
-    const int hwm = 5;
+    const int hwm = 25;
     const int linger = 0;
     try {
         subscriber.setsockopt(ZMQ_RCVHWM, &hwm, sizeof(hwm));
@@ -143,19 +143,18 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
         subscriber.connect(workerdata->uri.c_str());
         subscriber.setsockopt(ZMQ_SUBSCRIBE, NULL, 0); // subscribe to all messages
 
-        bool startup = true;
-        size_t throwFrames = 25;
+        // size_t throwFrames = 50;
         while (running)
         {
             zmq::message_t incoming;
             subscriber.recv(&incoming);
 
-            if(startup && (throwFrames > 0))
-            {   // Drop first 25 frames received. 
-                // It is most likely old frames from senders HWM-buffer.
-                --throwFrames;
-                continue;
-            }
+            // if(throwFrames > 0)
+            // {   // Drop first throwFrames number of frames received. 
+                // // It is most likely old frames from frame source HWM-buffer.
+                // --throwFrames;
+                // continue;
+            // }
 
             if (m_to_drop) {
                 queue_size = workerdata->in_messages->size();
@@ -212,7 +211,13 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                     etiLog.level(warn) << "ZeroMQ buffer overfull !";
 
                     buffer_full = true;
-                    throw std::runtime_error("ZMQ input full");
+
+					// while(workerdata->in_messages->size() > 14)
+					// {
+						// for()
+						// workerdata->in_messages->pop();
+					// }
+                    //throw std::runtime_error("ZMQ input full");
                 }
 
                 queue_size = workerdata->in_messages->size();
@@ -222,7 +227,9 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                  * that we keep transmission frame vs. ETI frame
                  * phase.
                  */
-                m_to_drop = 3;
+                // m_to_drop = 3;
+                m_to_drop = workerdata->max_queued_frames - 8;
+
             }
 
             if (queue_size < 5) {

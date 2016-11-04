@@ -158,7 +158,7 @@ class InputZeroMQWorker
         InputZeroMQWorker() :
             running(false),
             zmqcontext(1),
-            m_to_drop(0) { }
+            m_to_drop(40) { }
 
         void Start(struct InputZeroMQThreadData* workerdata);
         void Stop();
