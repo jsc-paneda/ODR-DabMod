@@ -635,11 +635,14 @@ void UHDWorker::process()
 
         if(process_extra_frame)
         {
-            etiLog.log(trace, "UHD,produce extra frame");
-            etiLog.log(trace, "UHD,wait");
-            uwd->frames.wait_and_pop(frame);
-            etiLog.log(trace, "UHD,pop");
-            handle_frame(&frame);
+            for (int loop = 0; loop < 5; ++loop)
+            {
+                etiLog.log(trace, "UHD,produce extra frame");
+                etiLog.log(trace, "UHD,wait");
+                uwd->frames.wait_and_pop(frame);
+                etiLog.log(trace, "UHD,pop");
+                handle_frame(&frame);
+            }
         }
     }
 }
