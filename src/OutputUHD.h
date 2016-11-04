@@ -156,6 +156,7 @@ class UHDWorker {
         int num_underflows;
         int num_late_packets;
         int num_consecutive_underflow_msgs;
+        std::atomic<bool> process_extra_frame;
 
         uhd::tx_metadata_t md;
         bool     last_tx_time_initialised;
@@ -276,8 +277,6 @@ class OutputUHD: public ModOutput, public RemoteControllable {
         boost::packaged_task<bool> gps_fix_pt;
         boost::unique_future<bool> gps_fix_future;
         boost::thread gps_fix_task;
-
-        std::atomic<bool> process_extra_frame;
 
         // Wait time in seconds to get fix
         static const int initial_gps_fix_wait = 180;
