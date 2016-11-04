@@ -134,7 +134,7 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
     // zmq sockets are not thread safe. That's why
     // we create it here, and not at object creation.
 
-    const int hwm = 10;
+    const int hwm = 50;
     const int linger = 0;
     try {
         subscriber.setsockopt(ZMQ_RCVHWM, &hwm, sizeof(hwm));
@@ -220,6 +220,7 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                     //throw std::runtime_error("ZMQ input full");
                 }
 
+				workerdata->in_messages->clear();
                 queue_size = workerdata->in_messages->size();
 
                 /* Drop three more incoming ETI frames before
@@ -228,7 +229,7 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                  * phase.
                  */
                 // m_to_drop = 3;
-                m_to_drop = workerdata->max_queued_frames / 2;
+                //m_to_drop = workerdata->max_queued_frames / 2;
 
             }
 
