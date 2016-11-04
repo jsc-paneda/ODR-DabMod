@@ -144,6 +144,9 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
         subscriber.connect(workerdata->uri.c_str());
         subscriber.setsockopt(ZMQ_SUBSCRIBE, NULL, 0); // subscribe to all messages
 
+        etiLog.level(trace) << "ZMQ,workerdata->max_queued_frames: " << workerdata->max_queued_frames;
+        etiLog.level(trace) << "ZMQ,workerdata->restart_queue_depth: " << workerdata->restart_queue_depth;
+
         size_t throwFrames = 0;
         while (running)
         {
@@ -226,10 +229,12 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                 //m_to_drop = 3;
                 if(workerdata->restart_queue_depth != 0)
                 {
+                    etiLog.level(warn) << "resetting ZeroMQ buffer to: " << workerdata->restart_queue_depth;
                     m_to_drop = workerdata->max_queued_frames - workerdata->restart_queue_depth;
                 }
                 else
                 {
+                    etiLog.level(warn) << "resetting ZeroMQ buffer to: " << workerdata->max_queued_frames / 2;
                     m_to_drop = workerdata->max_queued_frames / 2;
                 }
             }
