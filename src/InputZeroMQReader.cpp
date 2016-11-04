@@ -228,8 +228,8 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                  * phase.
                  */
                 // m_to_drop = 3;
-                // make sure max_queued_frames is at least 20 frames.
-                m_to_drop = workerdata->max_queued_frames - 20;
+                // make sure max_queued_frames is at least 16 ETI-frames.
+                m_to_drop = workerdata->max_queued_frames - (16 / NUM_FRAMES_PER_ZMQ_MESSAGE);
 
             }
 

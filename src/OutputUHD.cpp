@@ -124,7 +124,8 @@ OutputUHD::OutputUHD(
     first_run(true),
     gps_fix_verified(false),
     worker(&uwd),
-    myDelayBuf(0)
+    myDelayBuf(0),
+	process_extra_frame(false)
 {
     myConf.muting = true;     // is remote-controllable, and reset by the GPS fix check
     myConf.staticDelayUs = 0; // is remote-controllable
@@ -631,6 +632,15 @@ void UHDWorker::process()
         etiLog.log(trace, "UHD,pop");
 
         handle_frame(&frame);
+
+        if(process_extra_frame)
+        {
+            etiLog.log(trace, "UHD,produce extra frame");
+            etiLog.log(trace, "UHD,wait");
+            uwd->frames.wait_and_pop(frame);
+            etiLog.log(trace, "UHD,pop");
+            handle_frame(&frame);
+        }
     }
 }
 
@@ -769,12 +779,14 @@ void UHDWorker::handle_frame(const struct UHDWorkerFrameData *frame)
                     usrp_time,
                     num_underflows, num_late_packets);
 
-			if(++num_consecutive_underflow_msgs > 25)
-			{
-				num_consecutive_underflow_msgs = 0;
-				//boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
-				throw std::runtime_error("Too many consecutive underruns. Indicates unspecified internal problem, exiting...");
-			}
+            //boost::this_thread::sleep(boost::posix_time::milliseconds(100));
+            process_extra_frame = true;
+            if(++num_consecutive_underflow_msgs > 20)
+            {
+                num_consecutive_underflow_msgs = 0;
+                //boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
+                throw std::runtime_error("Too many consecutive underruns. Indicates unspecified internal problem, exiting...");
+            }
         }
 		else
 		{

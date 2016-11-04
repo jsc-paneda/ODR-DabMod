@@ -52,6 +52,7 @@ DESCRIPTION:
 #include <chrono>
 #include <memory>
 #include <string>
+#include <atomic>
 
 #include "Log.h"
 #include "ModOutput.h"
@@ -275,6 +276,8 @@ class OutputUHD: public ModOutput, public RemoteControllable {
         boost::packaged_task<bool> gps_fix_pt;
         boost::unique_future<bool> gps_fix_future;
         boost::thread gps_fix_task;
+
+        std::atomic<bool> process_extra_frame;
 
         // Wait time in seconds to get fix
         static const int initial_gps_fix_wait = 180;
