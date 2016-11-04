@@ -143,7 +143,7 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
         subscriber.connect(workerdata->uri.c_str());
         subscriber.setsockopt(ZMQ_SUBSCRIBE, NULL, 0); // subscribe to all messages
 
-        size_t throwFrames = 12;
+        size_t throwFrames = 0;
         while (running)
         {
             zmq::message_t incoming;
