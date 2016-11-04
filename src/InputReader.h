@@ -150,6 +150,7 @@ struct InputZeroMQThreadData
     ThreadsafeQueue<std::shared_ptr<std::vector<uint8_t> > > *in_messages;
     std::string uri;
     size_t max_queued_frames;
+	size_t restart_queue_depth;
 };
 
 class InputZeroMQWorker
@@ -194,7 +195,7 @@ class InputZeroMQReader : public InputReader
             worker_.Stop();
         }
 
-        int Open(const std::string& uri, size_t max_queued_frames);
+        int Open(const std::string& uri, size_t max_queued_frames, size_t restart_depth = 0);
 
         int GetNextFrame(void* buffer);
 

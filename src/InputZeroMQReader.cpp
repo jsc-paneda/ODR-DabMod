@@ -63,7 +63,7 @@ struct zmq_dab_message_t
     uint8_t  buf[NUM_FRAMES_PER_ZMQ_MESSAGE*6144];
 };
 
-int InputZeroMQReader::Open(const std::string& uri, size_t max_queued_frames)
+int InputZeroMQReader::Open(const std::string& uri, size_t max_queued_frames, size_t restart_depth)
 {
     // The URL might start with zmq+tcp://
     if (uri.substr(0, 4) == "zmq+") {
@@ -75,6 +75,7 @@ int InputZeroMQReader::Open(const std::string& uri, size_t max_queued_frames)
 
     workerdata_.uri = uri_;
     workerdata_.max_queued_frames = max_queued_frames;
+    workerdata_.restart_queue_depth = restart_depth;
     // launch receiver thread
     worker_.Start(&workerdata_);
 
@@ -212,11 +213,6 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
 
                     buffer_full = true;
 
-					// while(workerdata->in_messages->size() > 14)
-					// {
-						// for()
-						// workerdata->in_messages->pop();
-					// }
                     //throw std::runtime_error("ZMQ input full");
                 }
 
@@ -228,8 +224,14 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                  * phase.
                  */
                 //m_to_drop = 3;
-                m_to_drop = workerdata->max_queued_frames - 12;
-
+                if(workerdata->restart_queue_depth != 0)
+                {
+                    m_to_drop = workerdata->max_queued_frames - workerdata->restart_queue_depth;
+                }
+                else
+                {
+                    m_to_drop = workerdata->max_queued_frames / 2;
+                }
             }
 
             if (queue_size < 5) {
