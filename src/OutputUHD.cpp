@@ -124,8 +124,7 @@ OutputUHD::OutputUHD(
     first_run(true),
     gps_fix_verified(false),
     worker(&uwd),
-    myDelayBuf(0),
-	process_extra_frame(false)
+    myDelayBuf(0)
 {
     myConf.muting = true;     // is remote-controllable, and reset by the GPS fix check
     myConf.staticDelayUs = 0; // is remote-controllable
@@ -620,7 +619,8 @@ void UHDWorker::process()
 
     num_underflows   = 0;
     num_late_packets = 0;
-	num_consecutive_underflow_msgs = 0;
+    num_consecutive_underflow_msgs = 0;
+    process_extra_frame = false;
 
     while (uwd->running) {
         md.has_time_spec  = false;
