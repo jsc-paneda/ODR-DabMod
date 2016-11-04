@@ -228,7 +228,8 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                  * phase.
                  */
                 // m_to_drop = 3;
-                m_to_drop = workerdata->max_queued_frames - 8;
+                // make sure max_queued_frames is at least 20 frames.
+                m_to_drop = workerdata->max_queued_frames - 20;
 
             }
 
