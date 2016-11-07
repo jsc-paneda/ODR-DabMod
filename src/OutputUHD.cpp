@@ -619,6 +619,8 @@ void UHDWorker::process()
 
     num_underflows   = 0;
     num_late_packets = 0;
+    num_consecutive_underflow_msgs = 0;
+    process_extra_frame = false;
 
     while (uwd->running) {
         md.has_time_spec  = false;
@@ -630,6 +632,18 @@ void UHDWorker::process()
         etiLog.log(trace, "UHD,pop");
 
         handle_frame(&frame);
+
+        if(process_extra_frame)
+        {
+            for (int loop = 0; loop < 5; ++loop)
+            {
+                etiLog.log(trace, "UHD,produce extra frame");
+                etiLog.log(trace, "UHD,wait");
+                uwd->frames.wait_and_pop(frame);
+                etiLog.log(trace, "UHD,pop");
+                handle_frame(&frame);
+            }
+        }
     }
 }
 
@@ -767,7 +781,19 @@ void UHDWorker::handle_frame(const struct UHDWorkerFrameData *frame)
                     "%d underruns and %d late packets since last status.\n",
                     usrp_time,
                     num_underflows, num_late_packets);
-			boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
+
+            //boost::this_thread::sleep(boost::posix_time::milliseconds(100));
+            process_extra_frame = true;
+            if(++num_consecutive_underflow_msgs > 10)
+            {
+                num_consecutive_underflow_msgs = 0;
+                //boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
+                throw std::runtime_error("Too many consecutive underruns. Indicates unspecified internal problem, exiting...");
+            }
+        }
+        else
+        {
+            num_consecutive_underflow_msgs = 0;
         }
         num_underflows = 0;
         num_late_packets = 0;

@@ -71,6 +71,8 @@
 
 #define ZMQ_INPUT_MAX_FRAME_QUEUE 500
 
+// Default makes it match with old hard-coded settings.
+#define ZMQ_INPUT_QUEUE_RESTART_DEPTH ZMQ_INPUT_MAX_FRAME_QUEUE - 3
 
 typedef std::complex<float> complexf;
 
@@ -121,6 +123,7 @@ int launch_modulator(int argc, char* argv[])
     std::string inputName = "";
     std::string inputTransport = "file";
     unsigned inputMaxFramesQueued = ZMQ_INPUT_MAX_FRAME_QUEUE;
+    unsigned inputQueueRestartDepth = ZMQ_INPUT_QUEUE_RESTART_DEPTH;
 
     std::string outputName;
     int useZeroMQOutput = 0;
@@ -370,6 +373,8 @@ int launch_modulator(int argc, char* argv[])
         inputTransport = pt.get("input.transport", "file");
         inputMaxFramesQueued = pt.get("input.max_frames_queued",
                 ZMQ_INPUT_MAX_FRAME_QUEUE);
+        inputQueueRestartDepth = pt.get("input.restart_depth",
+                ZMQ_INPUT_QUEUE_RESTART_DEPTH);
 
         inputName = pt.get("input.source", "/dev/stdin");
 
@@ -701,7 +706,7 @@ int launch_modulator(int argc, char* argv[])
         ret = -1;
         throw std::runtime_error("Unable to open input");
 #else
-        inputZeroMQReader->Open(inputName, inputMaxFramesQueued);
+        inputZeroMQReader->Open(inputName, inputMaxFramesQueued, inputQueueRestartDepth);
         m.inputReader = inputZeroMQReader.get();
 #endif
     }
@@ -812,7 +817,7 @@ int launch_modulator(int argc, char* argv[])
                     run_again = true;
                     // Create a new input reader
                     inputZeroMQReader = make_shared<InputZeroMQReader>();
-                    inputZeroMQReader->Open(inputName, inputMaxFramesQueued);
+                    inputZeroMQReader->Open(inputName, inputMaxFramesQueued, inputQueueRestartDepth);
                     m.inputReader = inputZeroMQReader.get();
 #endif
                 }

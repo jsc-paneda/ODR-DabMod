@@ -52,6 +52,7 @@ DESCRIPTION:
 #include <chrono>
 #include <memory>
 #include <string>
+#include <atomic>
 
 #include "Log.h"
 #include "ModOutput.h"
@@ -154,6 +155,8 @@ class UHDWorker {
         // Asynchronous message statistics
         int num_underflows;
         int num_late_packets;
+        int num_consecutive_underflow_msgs;
+        std::atomic<bool> process_extra_frame;
 
         uhd::tx_metadata_t md;
         bool     last_tx_time_initialised;
