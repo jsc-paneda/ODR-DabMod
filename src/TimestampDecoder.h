@@ -2,7 +2,7 @@
    Copyright (C) 2005, 2006, 2007, 2008, 2009, 2010 Her Majesty the
    Queen in Right of Canada (Communications Research Center Canada)
 
-   Copyright (C) 2014
+   Copyright (C) 2014, 2015
    Matthias P. Braendli, matthias.braendli@mpb.li
 
     http://opendigitalradio.org
@@ -28,37 +28,22 @@
 #define TIMESTAMP_DECODER_H
 
 #include <queue>
+#include <memory>
 #include <string>
 #include <time.h>
 #include <math.h>
 #include <stdio.h>
 #include "Eti.h"
 #include "Log.h"
-
-struct modulator_offset_config
-{
-    bool use_offset_fixed;
-    double offset_fixed;
-    /* These two fields are used when the modulator is run with a fixed offset */
-
-    bool use_offset_file;
-    std::string offset_filename;
-    /* These two fields are used when the modulator reads the offset from a file */
-
-    unsigned delay_calculation_pipeline_stages;
-    /* Specifies by how many stages the timestamp must be delayed.
-     * (e.g. The FIRFilter is pipelined, therefore we must increase 
-     * delay_calculation_pipeline_stages by one if the filter is used
-     */
-};
+#include "RemoteControl.h"
 
 struct frame_timestamp
 {
     // Which frame count does this timestamp apply to
-    uint32_t fct;
+    int32_t fct;
 
     uint32_t timestamp_sec;
-    double timestamp_pps_offset;
+    uint32_t timestamp_pps; // In units of 1/16384000 s
     bool timestamp_valid;
     bool timestamp_refresh;
 
@@ -66,7 +51,7 @@ struct frame_timestamp
     {
         if (this != &rhs) {
             this->timestamp_sec = rhs.timestamp_sec;
-            this->timestamp_pps_offset = rhs.timestamp_pps_offset;
+            this->timestamp_pps = rhs.timestamp_pps;
             this->timestamp_valid = rhs.timestamp_valid;
             this->timestamp_refresh = rhs.timestamp_refresh;
             this->fct = rhs.fct;
@@ -81,11 +66,11 @@ struct frame_timestamp
         offset_pps = modf(diff, &offset_secs);
 
         this->timestamp_sec += lrintf(offset_secs);
-        this->timestamp_pps_offset += offset_pps;
+        this->timestamp_pps += lrintf(offset_pps * 16384000.0);
 
-        while (this->timestamp_pps_offset > 1)
+        while (this->timestamp_pps > 16384000)
         {
-            this->timestamp_pps_offset -= 1.0;
+            this->timestamp_pps -= 16384000;
             this->timestamp_sec += 1;
         };
         return *this;
@@ -98,24 +83,39 @@ struct frame_timestamp
         return ts;
     }
 
+    double pps_offset() const {
+        return timestamp_pps / 16384000.0;
+    }
+
     void print(const char* t)
     {
         fprintf(stderr,
-                "%s <struct frame_timestamp(%s, %d, %.9f)>\n", 
+                "%s <struct frame_timestamp(%s, %d, %.9f, %d)>\n",
                 t, this->timestamp_valid ? "valid" : "invalid",
-                 this->timestamp_sec, this->timestamp_pps_offset);
+                 this->timestamp_sec, pps_offset(),
+                 this->fct);
     }
 };
 
 /* This module decodes MNSC time information */
-class TimestampDecoder
+class TimestampDecoder : public RemoteControllable
 {
     public:
         TimestampDecoder(
-                struct modulator_offset_config& config,
-                Logger& logger):
-            myLogger(logger), modconfig(config)
+                /* The modulator adds this offset to the TIST to define time of
+                 * frame transmission
+                 */
+                double& offset_s,
+
+                /* Specifies by how many stages the timestamp must be delayed.
+                 * (e.g. The FIRFilter is pipelined, therefore we must increase
+                 * tist_delay_stages by one if the filter is used
+                 */
+                unsigned tist_delay_stages) :
+            RemoteControllable("tist"),
+            timestamp_offset(offset_s)
         {
+            m_tist_delay_stages = tist_delay_stages;
             inhibit_second_update = 0;
             time_pps = 0.0;
             time_secs = 0;
@@ -125,10 +125,10 @@ class TimestampDecoder
             gmtime_r(0, &temp_time);
             offset_changed = false;
 
-            myLogger.level(info) << "Setting up timestamp decoder with " << 
-                (modconfig.use_offset_fixed ? "fixed" : 
-                (modconfig.use_offset_file ? "dynamic" : "none")) <<
-                " offset";
+            RC_ADD_PARAMETER(offset, "TIST offset [s]");
+
+            etiLog.level(info) << "Setting up timestamp decoder with " <<
+                timestamp_offset << " offset";
 
         };
 
@@ -139,25 +139,36 @@ class TimestampDecoder
         void updateTimestampEti(
                 int framephase,
                 uint16_t mnsc,
-                double pps,
-                uint32_t fct);
+                uint32_t pps, // In units of 1/16384000 s
+                int32_t fct);
 
-        /* Update the modulator timestamp offset according to the modconf
+        /*********** REMOTE CONTROL ***************/
+        /* virtual void enrol_at(BaseRemoteController& controller)
+         * is inherited
          */
-        bool updateModulatorOffset();
+
+        /* Base function to set parameters. */
+        virtual void set_parameter(const std::string& parameter,
+                const std::string& value);
+
+        /* Getting a parameter always returns a string. */
+        virtual const std::string get_parameter(
+                const std::string& parameter) const;
+
+        const char* name() { return "TS"; }
+
 
     protected:
-        /* Main program logger */
-        Logger& myLogger;
-
         /* Push a new MNSC field into the decoder */
         void pushMNSCData(int framephase, uint16_t mnsc);
 
         /* Each frame contains the TIST field with the PPS offset.
          * For each frame, this function must be called to update
-         * the timestamp
+         * the timestamp.
+         *
+         * pps is in units of 1/16384000 s
          */
-        void updateTimestampPPS(double pps);
+        void updateTimestampPPS(uint32_t pps);
 
         /* Update the timestamp when a full set of MNSC data is
          * known. This function can be called at most every four
@@ -167,14 +178,12 @@ class TimestampDecoder
 
         struct tm temp_time;
         uint32_t time_secs;
-        uint32_t latestFCT;
-        double time_pps;
-        double timestamp_offset;
+        int32_t latestFCT;
+        uint32_t time_pps;
+        double& timestamp_offset;
+        unsigned m_tist_delay_stages;
         int inhibit_second_update;
         bool offset_changed;
-
-        /* configuration for the offset management */
-        struct modulator_offset_config& modconfig;
 
         /* When the type or identifier don't match, the decoder must
          * be disabled
@@ -189,8 +198,9 @@ class TimestampDecoder
          * synchronise two modulators if only one uses (for instance) the
          * FIRFilter (1 stage pipeline)
          */
-        std::queue<struct frame_timestamp*> queue_timestamps;
+        std::queue<std::shared_ptr<struct frame_timestamp> > queue_timestamps;
 
 };
 
 #endif
+

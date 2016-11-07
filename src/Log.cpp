@@ -3,7 +3,7 @@
    Her Majesty the Queen in Right of Canada (Communications Research
    Center Canada)
 
-   Copyright (C), 2014, Matthias P. Braendli, matthias.braendli@mpb.li
+   Copyright (C), 2016, Matthias P. Braendli, matthias.braendli@mpb.li
  */
 /*
    This file is part of ODR-DabMod.
@@ -24,8 +24,12 @@
 
 #include <list>
 #include <stdarg.h>
+#include <chrono>
 
 #include "Log.h"
+#include "Utils.h"
+
+using namespace std;
 
 Logger etiLog;
 
@@ -61,25 +65,91 @@ void Logger::log(log_level_t level, const char* fmt, ...)
 
 void Logger::logstr(log_level_t level, std::string message)
 {
-    /* Remove a potential trailing newline.
-     * It doesn't look good in syslog
-     */
-    if (message[message.length()-1] == '\n') {
-        message.resize(message.length()-1);
-    }
+    log_message_t m;
+    m.level = level;
+    m.message = message;
 
-    for (std::list<LogBackend*>::iterator it = backends.begin();
-            it != backends.end();
-            ++it) {
-        (*it)->log(level, message);
-    }
-
-    std::cerr << levels_as_str[level] << " " << message << std::endl;
+    m_message_queue.push(std::move(m));
 }
 
+void Logger::io_process()
+{
+    set_thread_name("logger");
+    while (1) {
+        log_message_t m;
+        while (m_message_queue.pop(m) == false) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        auto message = m.message;
+
+        if (m.level == debug and m.message.empty()) {
+            // Special message to stop thread
+            break;
+        }
+
+        /* Remove a potential trailing newline.
+         * It doesn't look good in syslog
+         */
+        if (message[message.length()-1] == '\n') {
+            message.resize(message.length()-1);
+        }
+
+        for (auto &backend : backends) {
+            backend->log(m.level, message);
+        }
+
+        if (m.level != log_level_t::trace) {
+            std::lock_guard<std::mutex> guard(m_cerr_mutex);
+            std::cerr << levels_as_str[m.level] << " " << message << std::endl;
+        }
+    }
+}
 
 LogLine Logger::level(log_level_t level)
 {
     return LogLine(this, level);
 }
 
+void LogToFile::log(log_level_t level, std::string message)
+{
+    if (level != log_level_t::trace) {
+        const char* log_level_text[] = {
+            "DEBUG", "INFO", "WARN", "ERROR", "ALERT", "EMERG"};
+
+        // fprintf is thread-safe
+        fprintf(log_file, SYSLOG_IDENT ": %s: %s\n",
+                log_level_text[(size_t)level], message.c_str());
+        fflush(log_file);
+    }
+}
+
+LogTracer::LogTracer(const string& trace_filename)
+{
+    name = "TRACE";
+    etiLog.level(info) << "Setting up TRACE to " << trace_filename;
+
+    m_trace_file = fopen(trace_filename.c_str(), "a");
+    if (m_trace_file == NULL) {
+        fprintf(stderr, "Cannot open trace file !");
+        throw std::runtime_error("Cannot open trace file !");
+    }
+
+    auto now = chrono::steady_clock::now().time_since_epoch();
+    m_trace_micros_startup =
+        chrono::duration_cast<chrono::microseconds>(now).count();
+
+    fprintf(m_trace_file, "0,TRACER,startup at %ld\n", m_trace_micros_startup);
+}
+
+void LogTracer::log(log_level_t level, std::string message)
+{
+    if (level == log_level_t::trace) {
+        const auto now = chrono::steady_clock::now().time_since_epoch();
+        const auto micros = chrono::duration_cast<chrono::microseconds>(now).count();
+
+        fprintf(m_trace_file, "%ld,%s\n",
+                micros - m_trace_micros_startup,
+                message.c_str());
+    }
+}

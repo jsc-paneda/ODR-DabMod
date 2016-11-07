@@ -38,25 +38,14 @@
  * that pushes elements into the queue, and one consumer that
  * retrieves the elements.
  *
- * The queue can make the consumer block until enough elements
- * are available.
+ * The queue can make the consumer block until an element
+ * is available.
  */
 
 template<typename T>
 class ThreadsafeQueue
 {
 public:
-    /* Create a new queue without any minimum required
-     * fill before it is possible to pop an element
-     */
-    ThreadsafeQueue() : the_required_size(1) {}
-
-    /* Create a queue where it has to contain at least
-     * required_size elements before pop is possible
-     */
-    ThreadsafeQueue(size_t required_size) : the_required_size(required_size) {
-    }
-
     /* Push one element into the queue, and notify another thread that
      * might be waiting.
      *
@@ -69,14 +58,37 @@ public:
         size_t queue_size = the_queue.size();
         lock.unlock();
 
-        notify();
+        the_rx_notification.notify_one();
 
         return queue_size;
     }
 
-    void notify()
+    /* Push one element into the queue, but wait until the
+     * queue size goes below the threshold.
+     *
+     * Notify waiting thread.
+     *
+     * returns the new queue size.
+     */
+    size_t push_wait_if_full(T const& val, size_t threshold)
     {
-        the_condition_variable.notify_one();
+        boost::mutex::scoped_lock lock(the_mutex);
+        while (the_queue.size() >= threshold) {
+            the_tx_notification.wait(lock);
+        }
+        the_queue.push(val);
+        size_t queue_size = the_queue.size();
+        lock.unlock();
+
+        the_rx_notification.notify_one();
+
+        return queue_size;
+    }
+
+    /* Send a notification for the receiver thread */
+    void notify(void)
+    {
+        the_rx_notification.notify_one();
     }
 
     bool empty() const
@@ -87,38 +99,45 @@ public:
 
     size_t size() const
     {
+        boost::mutex::scoped_lock lock(the_mutex);
         return the_queue.size();
     }
 
     bool try_pop(T& popped_value)
     {
         boost::mutex::scoped_lock lock(the_mutex);
-        if(the_queue.size() < the_required_size)
-        {
+        if (the_queue.empty()) {
             return false;
         }
 
         popped_value = the_queue.front();
         the_queue.pop();
+
+        lock.unlock();
+        the_tx_notification.notify_one();
+
         return true;
     }
 
-    void wait_and_pop(T& popped_value)
+    void wait_and_pop(T& popped_value, size_t prebuffering = 1)
     {
         boost::mutex::scoped_lock lock(the_mutex);
-        while(the_queue.size() < the_required_size) {
-            the_condition_variable.wait(lock);
+        while (the_queue.size() < prebuffering) {
+            the_rx_notification.wait(lock);
         }
 
         popped_value = the_queue.front();
         the_queue.pop();
+
+        lock.unlock();
+        the_tx_notification.notify_one();
     }
 
 private:
     std::queue<T> the_queue;
     mutable boost::mutex the_mutex;
-    boost::condition_variable the_condition_variable;
-    size_t the_required_size;
+    boost::condition_variable the_rx_notification;
+    boost::condition_variable the_tx_notification;
 };
 
 #endif

@@ -30,12 +30,12 @@ CicEqualizer::CicEqualizer(size_t nbCarriers, size_t spacing, int R) :
     ModCodec(ModFormat(nbCarriers * sizeof(complexf)),
             ModFormat(nbCarriers * sizeof(complexf))),
     myNbCarriers(nbCarriers),
-    mySpacing(spacing)
+    mySpacing(spacing),
+    myFilter(nbCarriers)
 {
     PDEBUG("CicEqualizer::CicEqualizer(%zu, %zu, %i) @ %p\n",
             nbCarriers, spacing, R, this);
 
-    myFilter = new float[nbCarriers];
     const int M = 1;
     const int N = 4;
     const float pi = 4.0f * atanf(1.0f);
@@ -46,11 +46,12 @@ CicEqualizer::CicEqualizer(size_t nbCarriers, size_t spacing, int R) :
         float angle = pi * k / spacing;
         if (k == 0) {
             myFilter[i] = 1.0f;
-	} else {
-		myFilter[i] = sinf(angle / R) / sinf(angle * M);
-		myFilter[i] = fabsf(myFilter[i]) * R * M;
-		myFilter[i] = powf(myFilter[i], N);
-	}
+        }
+        else {
+            myFilter[i] = sinf(angle / R) / sinf(angle * M);
+            myFilter[i] = fabsf(myFilter[i]) * R * M;
+            myFilter[i] = powf(myFilter[i], N);
+        }
         PDEBUG("HCic[%zu -> %i] = %f (%f dB) -> angle: %f\n",
                 i, k,myFilter[i], 20.0 * log10(myFilter[i]), angle);
     }
@@ -60,10 +61,6 @@ CicEqualizer::CicEqualizer(size_t nbCarriers, size_t spacing, int R) :
 CicEqualizer::~CicEqualizer()
 {
     PDEBUG("CicEqualizer::~CicEqualizer() @ %p\n", this);
-
-    if (myFilter != NULL) {
-        delete[] myFilter;
-    }
 }
 
 
@@ -93,3 +90,4 @@ int CicEqualizer::process(Buffer* const dataIn, Buffer* dataOut)
 
     return sizeOut;
 }
+

@@ -1,5 +1,50 @@
 This file contains information about the changes done to
-the ODR-DabMod in this repository
+ODR-DabMod in this repository
+
+2016-07-30: Matthias P. Braendli <matthias@mpb.li>
+	(v0.6.0):
+	* odr-dabmod:
+		Remove the broken KISS FFT support.
+		Replace FCT discontinuity check by verification of
+		the timestamps.
+		Change DSP thread priorities to realtime.
+		Quite some internal refactoring.
+		Fix segfault on quit due to incorrect teardown of FFTW.
+		Add Travis CI build instructions.
+
+2015-11-27: Matthias P. Braendli <matthias@mpb.li>
+	(v0.5.5):
+	* odr-dabmod:
+		Fix compile errors with recent C++ standard library.
+		Correct command line options when using UHD and ZMQ input.
+		Enable ZeroMQ be default in ./configure
+
+2015-09-18: Matthias P. Braendli <matthias@mpb.li>
+	(v0.5.4)
+	* odr-dabmod:
+		Better GPSDO handling, both for Ettus GPSDO
+		and ODR LEA-M8F board.
+		Add (experimental) TII support.
+		Improve thread priority definition.
+		Simplify handling of TIST offset, and add to RC.
+		Switch projecet to C++11.
+
+2015-07-24: Matthias P. Braendli <matthias@mpb.li>
+	(v0.5.3)
+	* odr-dabmod:
+		Replace zmq.hpp to support version 4.1.x
+
+2015-04-10: Matthias P. Braendli <matthias@mpb.li>
+	(v0.5.2)
+	* odr-dabmod:
+		Merge static delay parameter and ZeroMQ remote control.
+		Add max_frames_queued option for ZeroMQ input.
+		Restart modulator on FCT discontinuity or ZeroMQ input
+		buffer overrun.
+		Improve error messages and documentation.
+		Add ZeroMQ output REP socket type for interconnection with
+		GNURadio.
+		Fix license text in usage view.
 
 2015-01-24: Matthias P. Braendli <matthias@mpb.li>
 	(v0.5.1)

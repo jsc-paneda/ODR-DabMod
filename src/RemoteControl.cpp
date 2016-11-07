@@ -30,6 +30,7 @@
 #include <boost/thread.hpp>
 
 #include "RemoteControl.h"
+#include "Utils.h"
 
 using boost::asio::ip::tcp;
 using namespace std;
@@ -58,8 +59,11 @@ void RemoteControllerTelnet::restart_thread(long)
 
 void RemoteControllerTelnet::process(long)
 {
-    m_welcome = "ODR-DabMod Remote Control CLI\nWrite 'help' for help.\n**********\n";
-    m_prompt = "> ";
+    set_thread_name("telnet_rc");
+    std::string m_welcome = "ODR-DabMod Remote Control CLI\n"
+                            "Write 'help' for help.\n"
+                            "**********\n";
+    std::string m_prompt = "> ";
 
     std::string in_message;
     size_t length;
@@ -118,8 +122,7 @@ void RemoteControllerTelnet::process(long)
             socket.close();
         }
     }
-    catch (std::exception& e)
-    {
+    catch (std::exception& e) {
         std::cerr << "Remote control caught exception: " << e.what() << std::endl;
         m_fault = true;
     }
@@ -148,16 +151,12 @@ void RemoteControllerTelnet::dispatch_command(tcp::socket& socket, string comman
         stringstream ss;
 
         if (cmd.size() == 1) {
-            for (list<RemoteControllable*>::iterator it = m_cohort.begin();
-                    it != m_cohort.end(); ++it) {
-                ss << (*it)->get_rc_name() << endl;
+            for (auto &controllable : m_cohort) {
+                ss << controllable->get_rc_name() << endl;
 
-                list< vector<string> >::iterator param;
-                list< vector<string> > params = (*it)->get_parameter_descriptions();
-                for (param = params.begin();
-                        param != params.end();
-                        ++param) {
-                    ss << "\t" << (*param)[0] << " : " << (*param)[1] << endl;
+                list< vector<string> > params = controllable->get_parameter_descriptions();
+                for (auto &param : params) {
+                    ss << "\t" << param[0] << " : " << param[1] << endl;
                 }
             }
         }
@@ -172,9 +171,8 @@ void RemoteControllerTelnet::dispatch_command(tcp::socket& socket, string comman
             try {
                 stringstream ss;
                 list< vector<string> > r = get_param_list_values_(cmd[1]);
-                for (list< vector<string> >::iterator it = r.begin();
-                        it != r.end(); ++it) {
-                    ss << (*it)[0] << ": " << (*it)[1] << endl;
+                for (auto &param_val : r) {
+                    ss << param_val[0] << ": " << param_val[1] << endl;
                 }
                 reply(socket, ss.str());
 
@@ -183,8 +181,7 @@ void RemoteControllerTelnet::dispatch_command(tcp::socket& socket, string comman
                 reply(socket, e.what());
             }
         }
-        else
-        {
+        else {
             reply(socket, "Incorrect parameters for command 'show'");
         }
     }
@@ -198,8 +195,7 @@ void RemoteControllerTelnet::dispatch_command(tcp::socket& socket, string comman
                 reply(socket, e.what());
             }
         }
-        else
-        {
+        else {
             reply(socket, "Incorrect parameters for command 'get'");
         }
     }
@@ -270,47 +266,46 @@ void RemoteControllerZmq::restart_thread()
     m_child_thread = boost::thread(&RemoteControllerZmq::process, this);
 }
 
-void RemoteControllerZmq::recv_all(zmq::socket_t* pSocket, std::vector<std::string> &message)
+void RemoteControllerZmq::recv_all(zmq::socket_t& pSocket, std::vector<std::string> &message)
 {
-    int more = -1;
-    size_t more_size = sizeof(more);
-
-    while (more != 0)
-    {
+    bool more = true;
+    do {
         zmq::message_t msg;
-        pSocket->recv(&msg);
-        message.push_back(std::string((char*)msg.data(), msg.size()));
-        pSocket->getsockopt(ZMQ_RCVMORE, &more, &more_size);
-    }
+        pSocket.recv(&msg);
+        std::string incoming((char*)msg.data(), msg.size());
+        message.push_back(incoming);
+        more = msg.more();
+    } while (more);
 }
 
-void RemoteControllerZmq::send_ok_reply(zmq::socket_t *pSocket)
+void RemoteControllerZmq::send_ok_reply(zmq::socket_t &pSocket)
 {
     zmq::message_t msg(2);
     char repCode[2] = {'o', 'k'};
     memcpy ((void*) msg.data(), repCode, 2);
-    pSocket->send(msg, 0);
+    pSocket.send(msg, 0);
 }
 
-void RemoteControllerZmq::send_fail_reply(zmq::socket_t *pSocket, const std::string &error)
+void RemoteControllerZmq::send_fail_reply(zmq::socket_t &pSocket, const std::string &error)
 {
     zmq::message_t msg1(4);
     char repCode[4] = {'f', 'a', 'i', 'l'};
     memcpy ((void*) msg1.data(), repCode, 4);
-    pSocket->send(msg1, ZMQ_SNDMORE);
+    pSocket.send(msg1, ZMQ_SNDMORE);
 
     zmq::message_t msg2(error.length());
     memcpy ((void*) msg2.data(), error.c_str(), error.length());
-    pSocket->send(msg2, 0);
+    pSocket.send(msg2, 0);
 }
 
 void RemoteControllerZmq::process()
 {
+    set_thread_name("zmq_rc");
     // create zmq reply socket for receiving ctrl parameters
-    zmq::socket_t repSocket(m_zmqContext, ZMQ_REP);
-    std::cerr << "Starting zmq remote control thread" << std::endl;
-    try
-    {
+    etiLog.level(info) << "Starting zmq remote control thread";
+    try {
+        zmq::socket_t repSocket(m_zmqContext, ZMQ_REP);
+
         // connect the socket
         int hwm = 100;
         int linger = 0;
@@ -321,71 +316,99 @@ void RemoteControllerZmq::process()
 
         // create pollitem that polls the  ZMQ sockets
         zmq::pollitem_t pollItems[] = { {repSocket, 0, ZMQ_POLLIN, 0} };
-        for(;;)
-        {
+        for (;;) {
             zmq::poll(pollItems, 1, 100);
             std::vector<std::string> msg;
-            if (pollItems[0].revents & ZMQ_POLLIN)
-            {
-                recv_all(&repSocket, msg);
+
+            if (pollItems[0].revents & ZMQ_POLLIN) {
+                recv_all(repSocket, msg);
+
                 std::string command((char*)msg[0].data(), msg[0].size());
 
-                if (msg.size() == 1 && command == "ping")
-                {
-                    send_ok_reply(&repSocket);
+                if (msg.size() == 1 && command == "ping") {
+                    send_ok_reply(repSocket);
                 }
-                else if (msg.size() == 3 && command == "get")
-                {
+                else if (msg.size() == 1 && command == "list") {
+                    size_t cohort_size = m_cohort.size();
+                    for (auto &controllable : m_cohort) {
+                        std::stringstream ss;
+                        ss << controllable->get_rc_name();
+
+                        std::string msg_s = ss.str();
+
+                        zmq::message_t msg(ss.str().size());
+                        memcpy ((void*) msg.data(), msg_s.data(), msg_s.size());
+
+                        int flag = (--cohort_size > 0) ? ZMQ_SNDMORE : 0;
+                        repSocket.send(msg, flag);
+                    }
+                }
+                else if (msg.size() == 2 && command == "show") {
+                    std::string module((char*) msg[1].data(), msg[1].size());
+                    try {
+                        list< vector<string> > r = get_param_list_values_(module);
+                        size_t r_size = r.size();
+                        for (auto &param_val : r) {
+                            std::stringstream ss;
+                            ss << param_val[0] << ": " << param_val[1] << endl;
+                            zmq::message_t msg(ss.str().size());
+                            memcpy(msg.data(), ss.str().data(), ss.str().size());
+
+                            int flag = (--r_size > 0) ? ZMQ_SNDMORE : 0;
+                            repSocket.send(msg, flag);
+                        }
+                    }
+                    catch (ParameterError &e) {
+                        send_fail_reply(repSocket, e.what());
+                    }
+                }
+                else if (msg.size() == 3 && command == "get") {
                     std::string module((char*) msg[1].data(), msg[1].size());
                     std::string parameter((char*) msg[2].data(), msg[2].size());
 
-                    try
-                    {
+                    try {
                         std::string value = get_param_(module, parameter);
                         zmq::message_t msg(value.size());
                         memcpy ((void*) msg.data(), value.data(), value.size());
-                        repSocket.send(&msg, 0);
+                        repSocket.send(msg, 0);
                     }
-                    catch (ParameterError &err)
-                    {
-                        send_fail_reply(&repSocket, err.what());
+                    catch (ParameterError &err) {
+                        send_fail_reply(repSocket, err.what());
                     }
                 }
-                else if (msg.size() == 4 && command == "set")
-                {
+                else if (msg.size() == 4 && command == "set") {
                     std::string module((char*) msg[1].data(), msg[1].size());
                     std::string parameter((char*) msg[2].data(), msg[2].size());
                     std::string value((char*) msg[3].data(), msg[3].size());
 
-                    try
-                    {
+                    try {
                         set_param_(module, parameter, value);
-                        send_ok_reply(&repSocket);
+                        send_ok_reply(repSocket);
                     }
-                    catch (ParameterError &err)
-                    {
-                        send_fail_reply(&repSocket, err.what());
+                    catch (ParameterError &err) {
+                        send_fail_reply(repSocket, err.what());
                     }
                 }
-                else
-                    send_fail_reply(&repSocket, "Unsupported command");
+                else {
+                    send_fail_reply(repSocket,
+                            "Unsupported command. commands: list, show, get, set");
+                }
             }
 
             // check if thread is interrupted
             boost::this_thread::interruption_point();
         }
+        repSocket.close();
     }
     catch (boost::thread_interrupted&) {}
-    catch (zmq::error_t &e)
-    {
-        std::cerr << "ZMQ error: " << std::string(e.what()) << std::endl;
+    catch (zmq::error_t &e) {
+        etiLog.level(error) << "ZMQ RC error: " << std::string(e.what());
     }
-    catch (std::exception& e)
-    {
-        std::cerr << "Remote control caught exception: " << e.what() << std::endl;
+    catch (std::exception& e) {
+        etiLog.level(error) << "ZMQ RC caught exception: " << e.what();
         m_fault = true;
     }
-    repSocket.close();
 }
+
 #endif
 

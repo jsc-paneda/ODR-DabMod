@@ -3,7 +3,7 @@
    Her Majesty the Queen in Right of Canada (Communications Research
    Center Canada)
 
-   Copyright (C) 2013, 2014
+   Copyright (C) 2013, 2014, 2015
    Matthias P. Braendli, matthias.braendli@mpb.li
 
     http://opendigitalradio.org
@@ -40,8 +40,7 @@
 #include "porting.h"
 #include "InputReader.h"
 #include "PcDebug.h"
-
-#define MAX_QUEUE_SIZE 50
+#include "Utils.h"
 
 #define NUM_FRAMES_PER_ZMQ_MESSAGE 4
 /* A concatenation of four ETI frames,
@@ -64,10 +63,19 @@ struct zmq_dab_message_t
     uint8_t  buf[NUM_FRAMES_PER_ZMQ_MESSAGE*6144];
 };
 
-int InputZeroMQReader::Open(std::string uri)
+int InputZeroMQReader::Open(const std::string& uri, size_t max_queued_frames, size_t restart_depth)
 {
-    uri_ = uri;
-    workerdata_.uri = uri;
+    // The URL might start with zmq+tcp://
+    if (uri.substr(0, 4) == "zmq+") {
+        uri_ = uri.substr(4);
+    }
+    else {
+        uri_ = uri;
+    }
+
+    workerdata_.uri = uri_;
+    workerdata_.max_queued_frames = max_queued_frames;
+    workerdata_.restart_queue_depth = restart_depth;
     // launch receiver thread
     worker_.Start(&workerdata_);
 
@@ -78,12 +86,32 @@ int InputZeroMQReader::GetNextFrame(void* buffer)
 {
     const size_t framesize = 6144;
 
-    uint8_t* incoming;
-    in_messages_.wait_and_pop(incoming);
+    if (not worker_.is_running()) {
+        return 0;
+    }
 
-    memcpy(buffer, incoming, framesize);
+    std::shared_ptr<std::vector<uint8_t> > incoming;
 
-    delete incoming;
+    /* Do some prebuffering because reads will happen in bursts
+     * (4 ETI frames in TM1) and we should make sure that
+     * we can serve the data required for a full transmission frame.
+     */
+    if (in_messages_.size() < 4) {
+        const size_t prebuffering = 10;
+        etiLog.log(trace, "ZMQ,wait1");
+        in_messages_.wait_and_pop(incoming, prebuffering);
+    }
+    else {
+        etiLog.log(trace, "ZMQ,wait2");
+        in_messages_.wait_and_pop(incoming);
+    }
+    etiLog.log(trace, "ZMQ,pop");
+
+    if (not worker_.is_running()) {
+        throw zmq_input_overflow();
+    }
+
+    memcpy(buffer, &incoming->front(), framesize);
 
     return framesize;
 }
@@ -98,6 +126,7 @@ void InputZeroMQReader::PrintInfo()
 
 void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
 {
+    set_thread_name("zmqinput");
     size_t queue_size = 0;
 
     bool buffer_full = false;
@@ -106,15 +135,30 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
     // zmq sockets are not thread safe. That's why
     // we create it here, and not at object creation.
 
+    const int hwm = 30;
+    const int linger = 0;
     try {
+        subscriber.setsockopt(ZMQ_RCVHWM, &hwm, sizeof(hwm));
+        subscriber.setsockopt(ZMQ_SNDHWM, &hwm, sizeof(hwm));
+        subscriber.setsockopt(ZMQ_LINGER, &linger, sizeof(linger));
         subscriber.connect(workerdata->uri.c_str());
-
         subscriber.setsockopt(ZMQ_SUBSCRIBE, NULL, 0); // subscribe to all messages
 
+        etiLog.level(trace) << "ZMQ,workerdata->max_queued_frames: " << workerdata->max_queued_frames;
+        etiLog.level(trace) << "ZMQ,workerdata->restart_queue_depth: " << workerdata->restart_queue_depth;
+
+        size_t throwFrames = 0;
         while (running)
         {
             zmq::message_t incoming;
             subscriber.recv(&incoming);
+
+            if(throwFrames > 0)
+            {   // Drop first throwFrames number of frames received. 
+                // It is most likely old frames from frame source HWM-buffer.
+                --throwFrames;
+                continue;
+            }
 
             if (m_to_drop) {
                 queue_size = workerdata->in_messages->size();
@@ -123,18 +167,16 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                 }
                 m_to_drop--;
             }
-            else if (queue_size < MAX_QUEUE_SIZE) {
+            else if (queue_size < workerdata->max_queued_frames) {
                 if (buffer_full) {
-                    fprintf(stderr, "ZeroMQ buffer recovered: %zu elements\n",
-                            queue_size);
+                    etiLog.level(info) << "ZeroMQ buffer recovered: " << queue_size << " elements";
                     buffer_full = false;
                 }
 
                 zmq_dab_message_t* dab_msg = (zmq_dab_message_t*)incoming.data();
 
                 if (dab_msg->version != 1) {
-                    fprintf(stderr, "ZeroMQ input: wrong packet version %d\n",
-                            dab_msg->version);
+                    etiLog.level(error) << "ZeroMQ wrong packet version " << dab_msg->version;
                 }
 
                 int offset = sizeof(dab_msg->version) +
@@ -145,26 +187,24 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                     if (dab_msg->buflen[i] <= 0 ||
                         dab_msg->buflen[i] > 6144)
                     {
-                        fprintf(stderr, "ZeroMQ buffer %d: invalid length %d\n",
-                                i, dab_msg->buflen[i]);
+                        etiLog.level(error) << "ZeroMQ buffer " << i << " has invalid length " <<
+                            dab_msg->buflen[i];
                         // TODO error handling
                     }
                     else {
-                        uint8_t* buf = new uint8_t[6144];
+                        std::shared_ptr<std::vector<uint8_t> > buf =
+                            std::make_shared<std::vector<uint8_t> >(6144, 0x55);
 
                         const int framesize = dab_msg->buflen[i];
 
-                        memcpy(buf,
+                        memcpy(&buf->front(),
                                 ((uint8_t*)incoming.data()) + offset,
                                 framesize);
-
-                        // pad to 6144 bytes
-                        memset(&((uint8_t*)buf)[framesize],
-                                0x55, 6144 - framesize);
 
                         offset += framesize;
 
                         queue_size = workerdata->in_messages->push(buf);
+                        etiLog.log(trace, "ZMQ,push %zu", queue_size);
                     }
                 }
             }
@@ -172,34 +212,65 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                 workerdata->in_messages->notify();
 
                 if (!buffer_full) {
-                    fprintf(stderr, "ZeroMQ buffer overfull !\n");
+                    etiLog.level(warn) << "ZeroMQ buffer overflow!";
 
                     buffer_full = true;
+
+                    //throw std::runtime_error("ZMQ input full");
                 }
 
                 queue_size = workerdata->in_messages->size();
 
-                /* Drop three more incoming ETI frames before
-                 * we start accepting them again, to guarantee
-                 * that we keep transmission frame vs. ETI frame
-                 * phase.
-                 */
-                m_to_drop = 3;
+                // /* Drop three more incoming ETI frames before
+                 // * we start accepting them again, to guarantee
+                 // * that we keep transmission frame vs. ETI frame
+                 // * phase.
+                 // */
+                //m_to_drop = 3;
+
+                // Make sure we drop a multiple of 8 frames. 
+                // There are 4 in each ZMQ-msg, with NUM_FRAMES_PER_ZMQ_MESSAGE = 4 as default.
+                // We drop the current msg with 4 frames and need to drop another to keep phase.
+                // Plus the amount we need to reach wanted start depth.
+                m_to_drop = (8 / NUM_FRAMES_PER_ZMQ_MESSAGE) - 1; // To keep frame phase for all modes.
+
+                // Add amount of frames to reach wanted depth in a multiple of 8.
+                if(workerdata->restart_queue_depth != 0) // We have a restart_queue_depth value defined.
+                {
+                    m_to_drop += ((workerdata->max_queued_frames - workerdata->restart_queue_depth) / 8) * (8 / NUM_FRAMES_PER_ZMQ_MESSAGE);
+                }
+                else // We use half the max_queued_frames as default restart value when restart_queue_depth isn't defined.
+                {
+                    m_to_drop += ((workerdata->max_queued_frames / 2) / 8) * (8 / NUM_FRAMES_PER_ZMQ_MESSAGE);
+                }
+
+                if(m_to_drop % (8 / NUM_FRAMES_PER_ZMQ_MESSAGE) == 0)
+                {
+                    --m_to_drop;
+                    if(m_to_drop < 0)
+                    {
+                        m_to_drop = 0;
+                    }
+                }
             }
 
             if (queue_size < 5) {
-                fprintf(stderr, "ZeroMQ buffer underfull: %zu elements !\n",
-                        queue_size);
+                etiLog.level(warn) << "ZMQ,ZeroMQ buffer low: " << queue_size << " elements !";
             }
         }
     }
     catch (zmq::error_t& err) {
-        fprintf(stderr, "ZeroMQ error in RecvProcess: '%s'\n", err.what());
+        etiLog.level(error) << "ZeroMQ error in RecvProcess: '" << err.what() << "'";
+    }
+    catch (std::exception& err) {
     }
 
-    fprintf(stderr, "ZeroMQ input worker terminated\n");
+    etiLog.level(info) << "ZeroMQ input worker terminated";
 
     subscriber.close();
+
+    running = false;
+    workerdata->in_messages->notify();
 }
 
 void InputZeroMQWorker::Start(struct InputZeroMQThreadData* workerdata)

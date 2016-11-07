@@ -3,7 +3,7 @@
    Her Majesty the Queen in Right of Canada (Communications Research
    Center Canada)
 
-   Copyrigth (C) 2013
+   Copyrigth (C) 2013, 2015
    Matthias P. Braendli, matthias.braendli@mpb.li
  */
 /*
@@ -31,6 +31,8 @@
 #endif
 
 #include <cstdio>
+#include <vector>
+#include <memory>
 #if defined(HAVE_ZEROMQ)
 #  include "zmq.hpp"
 #  include "ThreadsafeQueue.h"
@@ -85,15 +87,15 @@ class InputReader
 class InputFileReader : public InputReader
 {
     public:
-        InputFileReader(Logger logger) :
+        InputFileReader() :
             streamtype_(ETI_STREAM_TYPE_NONE),
-            inputfile_(NULL), logger_(logger) {};
+            inputfile_(NULL) { }
 
         ~InputFileReader()
         {
-            fprintf(stderr, "\nClosing input file...\n");
-
             if (inputfile_ != NULL) {
+                fprintf(stderr, "\nClosing input file...\n");
+
                 fclose(inputfile_);
             }
         }
@@ -113,6 +115,9 @@ class InputFileReader : public InputReader
         }
 
     private:
+        InputFileReader(const InputFileReader& other);
+        InputFileReader& operator=(const InputFileReader& other);
+
         int IdentifyType();
 
         // Rewind the file, and replay anew
@@ -123,11 +128,18 @@ class InputFileReader : public InputReader
         std::string filename_;
         EtiStreamType streamtype_;
         FILE* inputfile_;
-        Logger logger_;
 
         size_t inputfilelength_;
         uint64_t nbframes_; // 64-bit because 32-bit overflow is
                             // after 2**32 * 24ms ~= 3.3 years
+};
+
+struct zmq_input_overflow : public std::exception
+{
+  const char* what () const throw ()
+  {
+    return "InputZMQ buffer overflow";
+  }
 };
 
 #if defined(HAVE_ZEROMQ)
@@ -135,8 +147,10 @@ class InputFileReader : public InputReader
 
 struct InputZeroMQThreadData
 {
-    ThreadsafeQueue<uint8_t*> *in_messages;
+    ThreadsafeQueue<std::shared_ptr<std::vector<uint8_t> > > *in_messages;
     std::string uri;
+    size_t max_queued_frames;
+	size_t restart_queue_depth;
 };
 
 class InputZeroMQWorker
@@ -149,10 +163,13 @@ class InputZeroMQWorker
 
         void Start(struct InputZeroMQThreadData* workerdata);
         void Stop();
+
+        bool is_running(void) { return running; }
     private:
+        bool running;
+
         void RecvProcess(struct InputZeroMQThreadData* workerdata);
 
-        bool running;
         zmq::context_t zmqcontext; // is thread-safe
         boost::thread recv_thread;
 
@@ -168,8 +185,7 @@ class InputZeroMQWorker
 class InputZeroMQReader : public InputReader
 {
     public:
-        InputZeroMQReader(Logger logger) :
-            logger_(logger), in_messages_(10)
+        InputZeroMQReader()
         {
             workerdata_.in_messages = &in_messages_;
         }
@@ -179,21 +195,22 @@ class InputZeroMQReader : public InputReader
             worker_.Stop();
         }
 
-        int Open(std::string uri);
+        int Open(const std::string& uri, size_t max_queued_frames, size_t restart_depth = 0);
 
         int GetNextFrame(void* buffer);
 
         void PrintInfo();
 
     private:
-        InputZeroMQReader(const InputZeroMQReader& other) {}
-        Logger logger_;
+        InputZeroMQReader(const InputZeroMQReader& other);
+        InputZeroMQReader& operator=(const InputZeroMQReader& other);
         std::string uri_;
 
         InputZeroMQWorker worker_;
-        ThreadsafeQueue<uint8_t*> in_messages_;
+        ThreadsafeQueue<std::shared_ptr<std::vector<uint8_t> > > in_messages_;
         struct InputZeroMQThreadData workerdata_;
 };
 
 #endif
 #endif
+

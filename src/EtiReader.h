@@ -2,7 +2,7 @@
    Copyright (C) 2005, 2006, 2007, 2008, 2009, 2010, 2011 Her Majesty
    the Queen in Right of Canada (Communications Research Center Canada)
 
-   Copyright (C) 2014
+   Copyright (C) 2014, 2015
    Matthias P. Braendli, matthias.braendli@mpb.li
 
     http://opendigitalradio.org
@@ -39,6 +39,7 @@
 #include "TimestampDecoder.h"
 
 #include <vector>
+#include <memory>
 #include <stdint.h>
 #include <sys/types.h>
 
@@ -46,16 +47,16 @@
 class EtiReader
 {
 public:
-    EtiReader(struct modulator_offset_config& modconf, Logger& logger);
-    virtual ~EtiReader();
-    EtiReader(const EtiReader&);
-    EtiReader& operator=(const EtiReader&);
+    EtiReader(
+            double& tist_offset_s,
+            unsigned tist_delay_stages,
+            RemoteControllers* rcs);
 
-    FicSource* getFic();
+    std::shared_ptr<FicSource>& getFic();
     unsigned getMode();
     unsigned getFp();
-    const std::vector<SubchannelSource*>& getSubchannels();
-    int process(Buffer* dataIn);
+    const std::vector<std::shared_ptr<SubchannelSource> >& getSubchannels();
+    int process(const Buffer* dataIn);
 
     void calculateTimestamp(struct frame_timestamp& ts)
     {
@@ -66,11 +67,8 @@ public:
     bool sourceContainsTimestamp();
 
 protected:
-    /* Main program logger */
-    Logger& myLogger;
-
-    /* Transform the ETI TIST to a PPS offset in ms */
-    double getPPSOffset();
+    /* Transform the ETI TIST to a PPS offset in units of 1/16384000 s */
+    uint32_t getPPSOffset();
 
     void sync();
     int state;
@@ -82,15 +80,15 @@ protected:
     eti_EOH eti_eoh;
     eti_EOF eti_eof;
     eti_TIST eti_tist;
-    FicSource* myFicSource;
-    std::vector<SubchannelSource*> mySources;
+    std::shared_ptr<FicSource> myFicSource;
+    std::vector<std::shared_ptr<SubchannelSource> > mySources;
     TimestampDecoder myTimestampDecoder;
-    
+
 private:
     size_t myCurrentFrame;
-    bool time_ext_enabled;
-    unsigned long timestamp_seconds;
+    bool eti_fc_valid;
 };
 
 
 #endif // ETI_READER_H
+

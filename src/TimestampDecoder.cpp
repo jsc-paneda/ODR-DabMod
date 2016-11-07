@@ -2,7 +2,7 @@
    Copyright (C) 2005, 2006, 2007, 2008, 2009, 2010 Her Majesty the
    Queen in Right of Canada (Communications Research Center Canada)
 
-   Copyright (C) 2014
+   Copyright (C) 2014, 2015
    Matthias P. Braendli, matthias.braendli@mpb.li
 
     http://opendigitalradio.org
@@ -28,7 +28,6 @@
 #include <iostream>
 #include <fstream>
 #include <string>
-#include <boost/lexical_cast.hpp>
 #include <sys/types.h>
 #include "PcDebug.h"
 #include "TimestampDecoder.h"
@@ -41,18 +40,20 @@
 
 void TimestampDecoder::calculateTimestamp(struct frame_timestamp& ts)
 {
-    struct frame_timestamp* ts_queued = new struct frame_timestamp;
+    std::shared_ptr<struct frame_timestamp> ts_queued =
+        std::make_shared<struct frame_timestamp>();
 
     /* Push new timestamp into queue */
     ts_queued->timestamp_valid = full_timestamp_received_mnsc;
     ts_queued->timestamp_sec = time_secs;
-    ts_queued->timestamp_pps_offset = time_pps;
+    ts_queued->timestamp_pps = time_pps;
     ts_queued->fct = latestFCT;
 
     ts_queued->timestamp_refresh = offset_changed;
     offset_changed = false;
 
-    MDEBUG("time_secs=%d, time_pps=%f\n", time_secs, time_pps);
+    MDEBUG("time_secs=%d, time_pps=%f\n", time_secs,
+            (double)time_pps / 16384000.0);
     *ts_queued += timestamp_offset;
 
     queue_timestamps.push(ts_queued);
@@ -62,14 +63,14 @@ void TimestampDecoder::calculateTimestamp(struct frame_timestamp& ts)
      *
      * Therefore, use <= and not < for comparison
      */
-    if (queue_timestamps.size() <= modconfig.delay_calculation_pipeline_stages) {
-        //fprintf(stderr, "* %zu %u ", queue_timestamps.size(), modconfig.delay_calculation_pipeline_stages);
+    if (queue_timestamps.size() <= m_tist_delay_stages) {
+        //fprintf(stderr, "* %zu %u ", queue_timestamps.size(), m_tist_delay_stages);
         /* Return invalid timestamp until the queue is full */
         ts.timestamp_valid = false;
         ts.timestamp_sec = 0;
-        ts.timestamp_pps_offset = 0;
+        ts.timestamp_pps = 0;
         ts.timestamp_refresh = false;
-        ts.fct = 0;
+        ts.fct = -1;
     }
     else {
         //fprintf(stderr, ". %zu ", queue_timestamps.size());
@@ -87,16 +88,14 @@ void TimestampDecoder::calculateTimestamp(struct frame_timestamp& ts)
                 ts.timestamp_sec,
                 ts.timestamp_pps_offset,
                 ts.timestamp_refresh);*/
-
-        delete ts_queued;
     }
 
     MDEBUG("Timestamp queue size %zu, delay_calc %u\n",
             queue_timestamps.size(),
-            modconfig.delay_calculation_pipeline_stages);
+            m_tist_delay_stages);
 
-    if (queue_timestamps.size() > modconfig.delay_calculation_pipeline_stages) {
-        myLogger.level(error) << "Error: Timestamp queue is too large : size " <<
+    if (queue_timestamps.size() > m_tist_delay_stages) {
+        etiLog.level(error) << "Error: Timestamp queue is too large : size " <<
             queue_timestamps.size() << "! This should not happen !";
     }
 
@@ -170,9 +169,9 @@ void TimestampDecoder::updateTimestampSeconds(uint32_t secs)
     }
 }
 
-void TimestampDecoder::updateTimestampPPS(double pps)
+void TimestampDecoder::updateTimestampPPS(uint32_t pps)
 {
-    MDEBUG("TimestampDecoder::updateTimestampPPS(%f)\n", pps);
+    MDEBUG("TimestampDecoder::updateTimestampPPS(%f)\n", (double)pps / 16384000.0);
 
     if (time_pps > pps) // Second boundary crossed
     {
@@ -190,85 +189,49 @@ void TimestampDecoder::updateTimestampPPS(double pps)
 void TimestampDecoder::updateTimestampEti(
         int framephase,
         uint16_t mnsc,
-        double pps,
-        uint32_t fct)
+        uint32_t pps, // In units of 1/16384000 s
+        int32_t fct)
 {
     updateTimestampPPS(pps);
     pushMNSCData(framephase, mnsc);
     latestFCT = fct;
 }
 
-
-bool TimestampDecoder::updateModulatorOffset()
+void TimestampDecoder::set_parameter(
+        const std::string& parameter,
+        const std::string& value)
 {
     using namespace std;
-    using boost::lexical_cast;
-    using boost::bad_lexical_cast;
 
-    if (modconfig.use_offset_fixed)
-    {
-        timestamp_offset = modconfig.offset_fixed;
-        return true;
-    }
-    else if (modconfig.use_offset_file)
-    {
-        bool r = false;
-        double newoffset;
+    stringstream ss(value);
+    ss.exceptions ( stringstream::failbit | stringstream::badbit );
 
-        std::string filedata;
-        ifstream filestream;
-
-        try
-        {
-            filestream.open(modconfig.offset_filename.c_str());
-            if (!filestream.eof())
-            {
-                getline(filestream, filedata);
-                try
-                {
-                    newoffset = lexical_cast<double>(filedata);
-                    r = true;
-                }
-                catch (bad_lexical_cast& e)
-                {
-                    myLogger.level(error) <<
-                        "Error parsing timestamp offset from file '" <<
-                        modconfig.offset_filename << "'";
-                    r = false;
-                }
-            }
-            else
-            {
-                myLogger.level(error) <<
-                    "Error reading from timestamp offset file: eof reached\n";
-                r = false;
-            }
-            filestream.close();
-        }
-        catch (exception& e)
-        {
-            myLogger.level(error) << "Error opening timestamp offset file\n";
-            r = false;
-        }
-
-
-        if (r)
-        {
-            if (timestamp_offset != newoffset)
-            {
-                timestamp_offset = newoffset;
-                myLogger.level(info) <<
-                    "TimestampDecoder::updateTimestampOffset: new offset is " <<
-                    timestamp_offset;
-                offset_changed = true;
-            }
-
-        }
-
-        return r;
+    if (parameter == "offset") {
+        ss >> timestamp_offset;
+        offset_changed = true;
     }
     else {
-        return false;
+        stringstream ss;
+        ss << "Parameter '" << parameter
+            << "' is not exported by controllable " << get_rc_name();
+        throw ParameterError(ss.str());
     }
+}
+
+const std::string TimestampDecoder::get_parameter(
+        const std::string& parameter) const
+{
+    using namespace std;
+
+    stringstream ss;
+    if (parameter == "offset") {
+        ss << timestamp_offset;
+    }
+    else {
+        ss << "Parameter '" << parameter <<
+            "' is not exported by controllable " << get_rc_name();
+        throw ParameterError(ss.str());
+    }
+    return ss.str();
 }
 

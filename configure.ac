@@ -1,7 +1,7 @@
 # Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012 Her Majesty the
 # Queen in Right of Canada (Communications Research Center Canada)
 
-# Copyright (C) 2014 Matthias P. Braendli, http://mpb.li
+# Copyright (C) 2016 Matthias P. Braendli, http://mpb.li
 
 # This file is part of ODR-DabMod.
 #
@@ -19,10 +19,11 @@
 # along with ODR-DabMod.  If not, see <http://www.gnu.org/licenses/>.
 
 AC_PREREQ(2.59)
-AC_INIT([ODR-DabMod], [0.5.1], [matthias.braendli@mpb.li])
+AC_INIT([ODR-DabMod], [0.6.0], [matthias.braendli@mpb.li])
 AC_CONFIG_AUX_DIR([build-aux])
+AC_CONFIG_MACRO_DIR([m4])
 AC_CANONICAL_SYSTEM
-AM_INIT_AUTOMAKE([-Wall foreign])
+AM_INIT_AUTOMAKE([-Wall foreign subdir-objects])
 AC_CONFIG_SRCDIR([src/DabMod.cpp])
 AM_CONFIG_HEADER([config.h])
 AM_SILENT_RULES([yes])
@@ -46,6 +47,8 @@ AC_PROG_INSTALL
 AC_PROG_CPP
 AC_PROG_MKDIR_P
 
+AX_CXX_COMPILE_STDCXX_11(noext,mandatory)
+
 EXTRA=""
 AC_ARG_ENABLE([debug],
         [AS_HELP_STRING([--enable-debug], [Enable debugger symbols])],
@@ -61,31 +64,17 @@ AC_ARG_ENABLE([trace],
         [AS_HELP_STRING([--enable-trace], [Enable trace output])],
         [], [enable_trace=no])
 
-# Which FFT library to use
-AC_ARG_ENABLE([fft_simd],
-        [AS_HELP_STRING([--enable-fft-simd],
-                        [Enable SIMD instructions for kiss-fft (unstable)])],
-        [], [enable_fft_simd=no])
-AC_ARG_ENABLE([kiss_fft],
-        [AS_HELP_STRING([--enable-kiss-fft], [Prefer KISS FFT over FFTW3])],
-        [], [enable_kiss=no])
-
 # ZeroMQ message queue input
 AC_ARG_ENABLE([zeromq],
-        AS_HELP_STRING([--enable-zeromq], [Enable ZeroMQ input, output and remote control]))
+        [AS_HELP_STRING([--disable-zeromq], [Disable ZeroMQ input, output and remote control])],
+        [], [enable_zeromq=yes])
 
 # UHD support control
 AC_ARG_ENABLE([output_uhd],
-        [AS_HELP_STRING([--enable-output-uhd], [Enable UHD output])],
+        [AS_HELP_STRING([--disable-output-uhd], [Disable UHD output])],
         [], [enable_output_uhd=yes])
 
-AS_IF([test "x$enable_kiss" = "xno"],
-      [PKG_CHECK_MODULES([FFTW], [fftw3f], enable_fftw=yes, enable_fftw=no)],
-      [enable_fftw=no])
-
-AS_IF([test "x$enable_fftw" = "xyes"],
-      AC_MSG_NOTICE([Found FFTW3]),
-      AC_MSG_NOTICE([Using Kiss FFT]) )
+PKG_CHECK_MODULES([FFTW], [fftw3f], enable_fftw=yes, enable_fftw=no)
 
 echo "Checking zeromq"
 
@@ -93,28 +82,20 @@ AS_IF([test "x$enable_zeromq" = "xyes"],
         [AC_DEFINE(HAVE_ZEROMQ, [1], [Define if ZeroMQ is enabled]) ,
          AC_CHECK_LIB(zmq, zmq_init, ZMQ_LIBS="-lzmq" ,[AC_MSG_ERROR([ZeroMQ libzmq is required])])])
 AS_IF([test "x$enable_debug" = "xno"],
-        [OPTIM="-O2" DEBUG="" EXTRA="$EXTRA -DNDEBUG"],
-        [OPTIM="-O0" DEBUG="-ggdb" EXTRA="$EXTRA"])
+        [EXTRA="$EXTRA -DNDEBUG"],
+        [EXTRA="$EXTRA"])
 AS_IF([test "x$enable_prof" != "xno"],
         [EXTRA="$EXTRA -pg"])
 
 # Define conditionals for Makefile.am
-AM_CONDITIONAL([USE_KISS_FFT], [test "x$enable_fftw" = "xno"])
 AM_CONDITIONAL([DEBUG], [test "x$enable_trace" = "xyes"])
 AM_CONDITIONAL([IS_GIT_REPO], [test -d '.git'])
 
 # Defines for config.h
-AS_IF([test "x$enable_fft_simd" = "xyes"],
-      [AC_DEFINE(USE_SIMD, [1], [Define to enable KISS FFT SIMD])])
-AS_IF([test "x$enable_fftw" = "xno"],
-      [AC_DEFINE(USE_KISS_FFT, [1], [Define to enable KISS])])
-AS_IF([test "x$enable_fftw" = "xyes"],
-      [AC_DEFINE(USE_FFTW, [1], [Define to enable FFTW])])
-
 AX_PTHREAD([], AC_MSG_ERROR([requires pthread]))
 
-AC_SUBST([CFLAGS], ["$OPTIM $DEBUG $EXTRA $FFTW_CFLAGS $PTHREAD_CFLAGS"])
-AC_SUBST([CXXFLAGS], ["$OPTIM $DEBUG $EXTRA $FFTW_CFLAGS $PTHREAD_CFLAGS"])
+AC_SUBST([CFLAGS], ["$EXTRA $FFTW_CFLAGS $PTHREAD_CFLAGS"])
+AC_SUBST([CXXFLAGS], ["$CXXFLAGS $EXTRA $FFTW_CFLAGS $PTHREAD_CFLAGS"])
 AC_SUBST([LIBS], ["$FFTW_LIBS $PTHREAD_LIBS $ZMQ_LIBS"])
 
 # Checks for UHD.
@@ -122,7 +103,7 @@ AS_IF([test "x$enable_output_uhd" = "xyes"],
         [AC_DEFINE(HAVE_OUTPUT_UHD, [1], [Define if UHD output is enabled]) ,
          AC_CHECK_LIB([uhd], [main], [], [AC_MSG_ERROR([library uhd is missing])])])
 
-AX_BOOST_BASE([1.41.0], [], AC_MSG_ERROR([BOOST 1.41 or later is required]))
+AX_BOOST_BASE([1.55.0], [], AC_MSG_ERROR([BOOST 1.55 or later is required]))
 AC_CHECK_LIB([boost_system], [main], [], [AC_MSG_ERROR([library boost_system is missing])])
 AC_CHECK_LIB([boost_thread], [main], [], [AC_MSG_ERROR([library boost_thread is missing])])
 
@@ -163,21 +144,24 @@ AC_LANG_POP([C++])
 
 # Check for SSE
 AC_MSG_CHECKING(for SSE in current arch/CFLAGS)
-AC_LINK_IFELSE([
-AC_LANG_PROGRAM([[
+
+save_CXXFLAGS="$CXXFLAGS"
+CXXFLAGS="$CXXFLAGS -msse"
+AC_MSG_CHECKING([whether we need to add -msse])
+AC_COMPILE_IFELSE(  [AC_LANG_PROGRAM([[
 #include <xmmintrin.h>
 __m128 testfunc(float *a, float *b) {
   return _mm_add_ps(_mm_loadu_ps(a), _mm_loadu_ps(b));
 }
 ]])],
-[
-has_sse=yes
-],
-[
-has_sse=no
-]
+[has_sse=yes],
+[has_sse=no]
 )
 AC_MSG_RESULT($has_sse)
+if test x"$has_sse" = xno; then
+    CXXFLAGS="$save_CXXFLAGS"
+fi
+
 
 AM_CONDITIONAL([HAVE_SSE], [test "x$has_sse" = "xyes"])
 
@@ -186,9 +170,7 @@ AM_CONDITIONAL([HAVE_SSE], [test "x$has_sse" = "xyes"])
 AC_TYPE_SIGNAL
 AC_CHECK_FUNCS([bzero floor ftime gettimeofday memset sqrt strchr strerror strtol])
 
-AC_CONFIG_FILES([Makefile
-                 lib/Makefile
-                 src/Makefile])
+AC_CONFIG_FILES([Makefile])
 AC_OUTPUT
 
 echo
@@ -196,7 +178,7 @@ echo "***********************************************"
 echo
 enabled=""
 disabled=""
-for feat in debug prof trace fftw fft_simd output_uhd zeromq
+for feat in debug prof trace output_uhd zeromq
 do
     eval var=\$enable_$feat
     AS_IF([test "x$var" = "xyes"],

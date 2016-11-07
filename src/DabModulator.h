@@ -3,8 +3,10 @@
    Her Majesty the Queen in Right of Canada (Communications Research
    Center Canada)
 
-   Includes modifications for which no copyright is claimed
-   2012, Matthias P. Braendli, matthias.braendli@mpb.li
+   Copyright (C) 2015
+   Matthias P. Braendli, matthias.braendli@mpb.li
+
+    http://opendigitalradio.org
  */
 /*
    This file is part of ODR-DabMod.
@@ -32,6 +34,7 @@
 
 #include <sys/types.h>
 #include <string>
+#include <memory>
 
 #include "ModCodec.h"
 #include "EtiReader.h"
@@ -40,20 +43,22 @@
 #include "OutputMemory.h"
 #include "RemoteControl.h"
 #include "Log.h"
+#include "TII.h"
 
 
 class DabModulator : public ModCodec
 {
 public:
     DabModulator(
-            struct modulator_offset_config& modconf,
+            double& tist_offset_s, unsigned tist_delay_stages,
             RemoteControllers* rcs,
-            Logger& logger,
-            unsigned outputRate = 2048000, unsigned clockRate = 0,
-            unsigned dabMode = 0, GainMode gainMode = GAIN_VAR,
-            float digGain = 1.0, float normalise = 1.0,
-            std::string filterTapsFilename = "");
-    DabModulator(const DabModulator& copy);
+            tii_config_t& tiiConfig,
+            unsigned outputRate, unsigned clockRate,
+            unsigned dabMode, GainMode gainMode,
+            float& digGain, float normalise,
+            std::string& filterTapsFilename);
+    DabModulator(const DabModulator& other) = delete;
+    DabModulator& operator=(const DabModulator& other) = delete;
     virtual ~DabModulator();
 
     int process(Buffer* const dataIn, Buffer* dataOut);
@@ -63,20 +68,19 @@ public:
     EtiReader* getEtiReader() { return &myEtiReader; }
 
 protected:
-    Logger& myLogger;
-
     void setMode(unsigned mode);
 
     unsigned myOutputRate;
     unsigned myClockRate;
     unsigned myDabMode;
     GainMode myGainMode;
-    float myDigGain;
+    float& myDigGain;
     float myNormalise;
     EtiReader myEtiReader;
     Flowgraph* myFlowgraph;
     OutputMemory* myOutput;
-    std::string myFilterTapsFilename;
+    std::string& myFilterTapsFilename;
+    tii_config_t& myTiiConfig;
     RemoteControllers* myRCs;
 
     size_t myNbSymbols;
@@ -88,5 +92,5 @@ protected:
     size_t myFicSizeIn;
 };
 
-
 #endif // DAB_MODULATOR_H
+

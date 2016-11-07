@@ -10,3 +10,12 @@ Matthias P. Braendli <matthias [at] mpb [dot] li>
     - Improvements in logging (log to file, to syslog)
     - ZeroMQ ETI input
     - Telnet remote-control
+    - ZeroMQ I/Q output
+    - I/Q conversion to signed 8-bit
+    - ARM support
+    - GPSDO monitoring on USRPs
+    - TII
+
+Jörgen Scott
+    - ZeroMQ remote control
+    - Static delay offset

@@ -29,12 +29,14 @@
 
 #include "FIRFilter.h"
 #include "PcDebug.h"
+#include "Utils.h"
 
 #include <stdio.h>
 #include <stdexcept>
 
 #include <iostream>
 #include <fstream>
+#include <memory>
 
 #ifdef __AVX__
 #   include <immintrin.h>
@@ -54,15 +56,17 @@ void FIRFilterWorker::process(struct FIRFilterWorkerData *fwd)
     struct timespec time_start;
     struct timespec time_end;
 
+    set_realtime_prio(1);
+    set_thread_name("firfilter");
+
     // This thread creates the dataOut buffer, and deletes
     // the incoming buffer
 
     while(running) {
-        Buffer* dataIn;
+        std::shared_ptr<Buffer> dataIn;
         fwd->input_queue.wait_and_pop(dataIn);
 
-        Buffer* dataOut;
-        dataOut = new Buffer();
+        std::shared_ptr<Buffer> dataOut = make_shared<Buffer>();
         dataOut->setLength(dataIn->getLength());
 
         PDEBUG("FIRFilterWorker: dataIn->getLength() %zu\n", dataIn->getLength());
@@ -91,7 +95,7 @@ void FIRFilterWorker::process(struct FIRFilterWorkerData *fwd)
             fprintf(stderr, "FIRFilterWorker: out not aligned %p ", out);
             throw std::runtime_error("FIRFilterWorker: out not aligned");
         }
-            
+
         clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time_start);
 
         __m256 AVXout;
@@ -100,10 +104,10 @@ void FIRFilterWorker::process(struct FIRFilterWorkerData *fwd)
         {
             boost::mutex::scoped_lock lock(fwd->taps_mutex);
 
-            for (i = 0; i < sizeIn - 2*fwd->n_taps; i += 8) {
+            for (i = 0; i < sizeIn - 2*fwd->taps.size(); i += 8) {
                 AVXout = _mm256_setr_ps(0,0,0,0,0,0,0,0);
 
-                for (int j = 0; j < fwd->n_taps; j++) {
+                for (size_t j = 0; j < fwd->taps.size; j++) {
                     if ((uintptr_t)(&in[i+2*j]) % 32 == 0) {
                         AVXin = _mm256_load_ps(&in[i+2*j]); //faster when aligned
                     }
@@ -141,7 +145,7 @@ void FIRFilterWorker::process(struct FIRFilterWorkerData *fwd)
             fprintf(stderr, "FIRFilterWorker: out not aligned %p ", out);
             throw std::runtime_error("FIRFilterWorker: out not aligned");
         }
-            
+
         clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time_start);
 
         __m128 SSEout;
@@ -150,10 +154,10 @@ void FIRFilterWorker::process(struct FIRFilterWorkerData *fwd)
         {
             boost::mutex::scoped_lock lock(fwd->taps_mutex);
 
-            for (i = 0; i < sizeIn - 2*fwd->n_taps; i += 4) {
+            for (i = 0; i < sizeIn - 2*fwd->taps.size(); i += 4) {
                 SSEout = _mm_setr_ps(0,0,0,0);
 
-                for (int j = 0; j < fwd->n_taps; j++) {
+                for (size_t j = 0; j < fwd->taps.size(); j++) {
                     if ((uintptr_t)(&in[i+2*j]) % 16 == 0) {
                         SSEin = _mm_load_ps(&in[i+2*j]); //faster when aligned
                     }
@@ -189,13 +193,13 @@ void FIRFilterWorker::process(struct FIRFilterWorkerData *fwd)
         {
             boost::mutex::scoped_lock lock(fwd->taps_mutex);
             // Convolve by aligning both frame and taps at zero.
-            for (i = 0; i < sizeIn - 2*fwd->n_taps; i += 4) {
+            for (i = 0; i < sizeIn - 2*fwd->taps.size(); i += 4) {
                 out[i]    = 0.0;
                 out[i+1]  = 0.0;
                 out[i+2]  = 0.0;
                 out[i+3]  = 0.0;
 
-                for (int j = 0; j < fwd->n_taps; j++) {
+                for (size_t j = 0; j < fwd->taps.size(); j++) {
                     out[i]   += in[i   + 2*j] * fwd->taps[j];
                     out[i+1] += in[i+1 + 2*j] * fwd->taps[j];
                     out[i+2] += in[i+2 + 2*j] * fwd->taps[j];
@@ -226,10 +230,10 @@ void FIRFilterWorker::process(struct FIRFilterWorkerData *fwd)
         float* out      = reinterpret_cast<float*>(dataOut->getData());
         size_t sizeIn   = dataIn->getLength() / sizeof(float);
 
-        for (i = 0; i < sizeIn - 2*fwd->n_taps; i += 1) {
+        for (i = 0; i < sizeIn - 2*fwd->taps.size(); i += 1) {
             out[i]  = 0.0;
 
-            for (int j = 0; j < fwd->n_taps; j++) {
+            for (size_t j = 0; j < fwd->taps.size(); j++) {
                 out[i]  += in[i+2*j] * fwd->taps[j];
             }
         }
@@ -248,13 +252,13 @@ void FIRFilterWorker::process(struct FIRFilterWorkerData *fwd)
         complexf* out      = reinterpret_cast<complexf*>(dataOut->getData());
         size_t sizeIn      = dataIn->getLength() / sizeof(complexf);
 
-        for (i = 0; i < sizeIn - fwd->n_taps; i += 4) {
+        for (i = 0; i < sizeIn - fwd->taps.size(); i += 4) {
             out[i]   = 0.0;
             out[i+1] = 0.0;
             out[i+2] = 0.0;
             out[i+3] = 0.0;
 
-            for (int j = 0; j < fwd->n_taps; j++) {
+            for (size_t j = 0; j < fwd->taps.size(); j++) {
                 out[i]   += in[i+j  ] * fwd->taps[j];
                 out[i+1] += in[i+1+j] * fwd->taps[j];
                 out[i+2] += in[i+2+j] * fwd->taps[j];
@@ -275,10 +279,10 @@ void FIRFilterWorker::process(struct FIRFilterWorkerData *fwd)
         complexf* out      = reinterpret_cast<complexf*>(dataOut->getData());
         size_t sizeIn      = dataIn->getLength() / sizeof(complexf);
 
-        for (i = 0; i < sizeIn - fwd->n_taps; i += 1) {
+        for (i = 0; i < sizeIn - fwd->taps.size(); i += 1) {
             out[i]   = 0.0;
 
-            for (int j = 0; j < fwd->n_taps; j++) {
+            for (size_t j = 0; j < fwd->taps.size(); j++) {
                 out[i]  += in[i+j  ] * fwd->taps[j];
             }
         }
@@ -290,16 +294,15 @@ void FIRFilterWorker::process(struct FIRFilterWorkerData *fwd)
             }
         }
 #endif
-        
+
         calculationTime += (time_end.tv_sec - time_start.tv_sec) * 1000000000L +
             time_end.tv_nsec - time_start.tv_nsec;
         fwd->output_queue.push(dataOut);
-        delete dataIn;
     }
 }
 
 
-FIRFilter::FIRFilter(std::string taps_file) :
+FIRFilter::FIRFilter(std::string& taps_file) :
     ModCodec(ModFormat(sizeof(complexf)), ModFormat(sizeof(complexf))),
     RemoteControllable("firfilter"),
     myTapsFile(taps_file)
@@ -312,9 +315,7 @@ FIRFilter::FIRFilter(std::string taps_file) :
 
     number_of_runs = 0;
 
-    firwd.taps = new float[0];
-
-    load_filter_taps();
+    load_filter_taps(myTapsFile);
 
 #if __AVX__
     fprintf(stderr, "FIRFilter: WARNING: using experimental AVX code !\n");
@@ -324,12 +325,11 @@ FIRFilter::FIRFilter(std::string taps_file) :
     worker.start(&firwd);
 }
 
-void
-FIRFilter::load_filter_taps()
+void FIRFilter::load_filter_taps(std::string tapsFile)
 {
-    std::ifstream taps_fstream(myTapsFile.c_str());
+    std::ifstream taps_fstream(tapsFile.c_str());
     if(!taps_fstream) { 
-        fprintf(stderr, "FIRFilter: file %s could not be opened !\n", myTapsFile.c_str());
+        fprintf(stderr, "FIRFilter: file %s could not be opened !\n", tapsFile.c_str());
         throw std::runtime_error("FIRFilter: Could not open file with taps! ");
     }
     int n_taps;
@@ -344,20 +344,17 @@ FIRFilter::load_filter_taps()
         fprintf(stderr, "FIRFilter: warning: taps file has more than 100 taps\n");
     }
 
-    myNtaps = n_taps;
+    fprintf(stderr, "FIRFilter: Reading %d taps...\n", n_taps);
 
-    fprintf(stderr, "FIRFilter: Reading %d taps...\n", myNtaps);
-
-    myFilter = new float[myNtaps];
+    std::vector<float> filter_taps(n_taps);
 
     int n;
     for (n = 0; n < n_taps; n++) {
-        taps_fstream >> myFilter[n];
-        PDEBUG("FIRFilter: tap: %f\n",  myFilter[n] );
+        taps_fstream >> filter_taps[n];
+        PDEBUG("FIRFilter: tap: %f\n",  filter_taps[n] );
         if (taps_fstream.eof()) {
             fprintf(stderr, "FIRFilter: file %s should contains %d taps, but EOF reached "\
-                    "after %d taps !\n", myTapsFile.c_str(), n_taps, n);
-            delete[] myFilter;
+                    "after %d taps !\n", tapsFile.c_str(), n_taps, n);
             throw std::runtime_error("FIRFilter: filtertaps file invalid ! ");
         }
     }
@@ -365,10 +362,7 @@ FIRFilter::load_filter_taps()
     {
         boost::mutex::scoped_lock lock(firwd.taps_mutex);
 
-        delete[] firwd.taps;
-
-        firwd.taps = myFilter;
-        firwd.n_taps = myNtaps;
+        firwd.taps = filter_taps;
     }
 }
 
@@ -378,10 +372,6 @@ FIRFilter::~FIRFilter()
     PDEBUG("FIRFilter::~FIRFilter() @ %p\n", this);
 
     worker.stop();
-
-    if (myFilter != NULL) {
-        delete[] myFilter;
-    }
 }
 
 
@@ -393,17 +383,16 @@ int FIRFilter::process(Buffer* const dataIn, Buffer* dataOut)
     // This thread creates the dataIn buffer, and deletes
     // the outgoing buffer
 
-    Buffer* inbuffer = new Buffer(dataIn->getLength(), dataIn->getData());
+    std::shared_ptr<Buffer> inbuffer =
+        make_shared<Buffer>(dataIn->getLength(), dataIn->getData());
 
     firwd.input_queue.push(inbuffer);
 
     if (number_of_runs > 2) {
-        Buffer* outbuffer;
+        std::shared_ptr<Buffer> outbuffer;
         firwd.output_queue.wait_and_pop(outbuffer);
 
         dataOut->setData(outbuffer->getData(), outbuffer->getLength());
-
-        delete outbuffer;
     }
     else {
         dataOut->setLength(dataIn->getLength());
@@ -424,9 +413,9 @@ void FIRFilter::set_parameter(const string& parameter, const string& value)
         throw ParameterError("Parameter 'ntaps' is read-only");
     }
     else if (parameter == "tapsfile") {
-        myTapsFile = value;
         try {
-            load_filter_taps();
+            load_filter_taps(value);
+            myTapsFile = value;
         }
         catch (std::runtime_error &e) {
             throw ParameterError(e.what());
@@ -443,7 +432,7 @@ const string FIRFilter::get_parameter(const string& parameter) const
 {
     stringstream ss;
     if (parameter == "ntaps") {
-        ss << myNtaps;
+        ss << firwd.taps.size();
     }
     else if (parameter == "tapsfile") {
         ss << myTapsFile;

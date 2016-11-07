@@ -3,7 +3,7 @@
    Her Majesty the Queen in Right of Canada (Communications Research
    Center Canada)
 
-   Copyright (C) 2014
+   Copyright (C) 2014, 2015
    Matthias P. Braendli, matthias.braendli@mpb.li
 
     http://opendigitalradio.org
@@ -30,7 +30,7 @@
 #endif
 
 #include "porting.h"
-
+#include "Utils.h"
 #include "Log.h"
 #include "DabModulator.h"
 #include "InputMemory.h"
@@ -46,6 +46,7 @@
 #include "FIRFilter.h"
 #include "RemoteControl.h"
 
+#include <memory>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/ini_parser.hpp>
 #include <complex>
@@ -68,9 +69,18 @@
 #   define memalign(a, b)   malloc(b)
 #endif
 
+#define ZMQ_INPUT_MAX_FRAME_QUEUE 500
+
+// Default makes it match with old hard-coded settings.
+#define ZMQ_INPUT_QUEUE_RESTART_DEPTH ZMQ_INPUT_MAX_FRAME_QUEUE - 3
 
 typedef std::complex<float> complexf;
 
+using namespace std;
+
+// We need global lifetime for the RemoteControllers because
+// some destructors of long lived objects use it.
+RemoteControllers rcs;
 
 volatile sig_atomic_t running = 1;
 
@@ -81,114 +91,55 @@ void signalHandler(int signalNb)
     running = 0;
 }
 
-
-void printUsage(char* progName, FILE* out = stderr)
+struct modulator_data
 {
-    fprintf(out, "Welcome to %s %s, compiled at %s, %s\n\n",
-            PACKAGE,
-#if defined(GITVERSION)
-            GITVERSION,
-#else
-            VERSION,
-#endif
-            __DATE__, __TIME__);
-    fprintf(out, "Usage with configuration file:\n");
-    fprintf(out, "\t%s [-C] config_file.ini\n\n", progName);
+    modulator_data() :
+        inputReader(NULL),
+        framecount(0),
+        flowgraph(NULL),
+        rcs(NULL) {}
 
-    fprintf(out, "Usage with command line options:\n");
-    fprintf(out, "\t%s"
-            " input"
-            " (-f filename | -u uhddevice -F frequency) "
-            " [-G txgain]"
-            " [-o offset]"
-            " [-O offsetfile]"
-            " [-T filter_taps_file]"
-            " [-a gain]"
-            " [-c clockrate]"
-            " [-g gainMode]"
-            " [-h]"
-            " [-l]"
-            " [-m dabMode]"
-            " [-r samplingRate]"
-            "\n", progName);
-    fprintf(out, "Where:\n");
-    fprintf(out, "input:         ETI input filename (default: stdin).\n");
-    fprintf(out, "-f name:       Use file output with given filename. (use /dev/stdout for standard output)\n");
-    fprintf(out, "-u device:     Use UHD output with given device string. (use "" for default device)\n");
-    fprintf(out, "-F frequency:  Set the transmit frequency when using UHD output. (mandatory option when using UHD)\n");
-    fprintf(out, "-G txgain:     Set the transmit gain for the UHD driver (default: 0)\n");
-    fprintf(out, "-o:            (UHD only) Set the timestamp offset added to the timestamp in the ETI. The offset is a double.\n");
-    fprintf(out, "-O:            (UHD only) Set the file containing the timestamp offset added to the timestamp in the ETI.\n"
-                                 "The file is read every six seconds, and must contain a double value.\n");
-    fprintf(out, "                  Specifying either -o or -O has two implications: It enables synchronous transmission,\n"
-                 "                  requiring an external REFCLK and PPS signal and frames that do not contain a valid timestamp\n"
-                 "                  get muted.\n\n");
-    fprintf(out, "-T taps_file:  Enable filtering before the output, using the specified file containing the filter taps.\n");
-    fprintf(out, "-a gain:       Apply digital amplitude gain.\n");
-    fprintf(out, "-c rate:       Set the DAC clock rate and enable Cic Equalisation.\n");
-    fprintf(out, "-g:            Set computation gain mode: "
-            "%u FIX, %u MAX, %u VAR\n", GAIN_FIX, GAIN_MAX, GAIN_VAR);
-    fprintf(out, "-h:            Print this help.\n");
-    fprintf(out, "-l:            Loop file when reach end of file.\n");
-    fprintf(out, "-m mode:       Set DAB mode: (0: auto, 1-4: force).\n");
-    fprintf(out, "-r rate:       Set output sampling rate (default: 2048000).\n");
-}
+    InputReader* inputReader;
+    Buffer data;
+    uint64_t framecount;
 
+    Flowgraph* flowgraph;
+    RemoteControllers* rcs;
+};
 
-void printVersion(FILE *out = stderr)
-{
-    fprintf(out, "Welcome to %s %s, compiled at %s, %s\n\n",
-            PACKAGE, VERSION, __DATE__, __TIME__);
-    fprintf(out,
-            "    ODR-DabMod is copyright (C) Her Majesty the Queen in Right of Canada,\n"
-            "    2009, 2010, 2011, 2012 Communications Research Centre (CRC),\n"
-            "     and\n"
-            "    Copyright (C) 2014 Matthias P. Braendli, matthias.braendli@mpb.li\n"
-            "\n"
-            "    http://opendigitalradio.org\n"
-            "\n"
-            "    This program is available free of charge and is licensed to you on a\n"
-            "    non-exclusive basis; you may not redistribute it.\n"
-            "\n"
-            "    This program is provided \"AS IS\" in the hope that it will be useful, but\n"
-            "    WITHOUT ANY WARRANTY with respect to its accurancy or usefulness; witout\n"
-            "    even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR\n"
-            "    PURPOSE and NONINFRINGEMENT.\n"
-            "\n"
-            "    In no event shall CRC be LIABLE for any LOSS, DAMAGE or COST that may be\n"
-            "    incurred in connection with the use of this software.\n"
-            "\n"
-#if USE_KISS_FFT
-            "ODR-DabMod makes use of the following open source packages:\n"
-            "    Kiss FFT v1.2.9 (Revised BSD) - http://kissfft.sourceforge.net/\n"
-#endif
-           );
+enum class run_modulator_state_t {
+    failure,    // Corresponds to all failures
+    normal_end, // Number of frames to modulate was reached
+    again,      // ZeroMQ overrun
+    reconfigure // Some sort of change of configuration we cannot handle happened
+};
 
-}
+run_modulator_state_t run_modulator(modulator_data& m);
 
-
-int main(int argc, char* argv[])
+int launch_modulator(int argc, char* argv[])
 {
     int ret = 0;
     bool loop = false;
     std::string inputName = "";
     std::string inputTransport = "file";
+    unsigned inputMaxFramesQueued = ZMQ_INPUT_MAX_FRAME_QUEUE;
+    unsigned inputQueueRestartDepth = ZMQ_INPUT_QUEUE_RESTART_DEPTH;
 
     std::string outputName;
     int useZeroMQOutput = 0;
+    std::string zmqOutputSocketType = "";
     int useFileOutput = 0;
     std::string fileOutputFormat = "complexf";
     int useUHDOutput = 0;
 
-    uint64_t frame = 0;
     size_t outputRate = 2048000;
     size_t clockRate = 0;
     unsigned dabMode = 0;
     float digitalgain = 1.0f;
     float normalise = 1.0f;
-    GainMode gainMode = GAIN_VAR;
-    Buffer data;
+    GainMode gainMode = GainMode::GAIN_VAR;
 
+    tii_config_t tiiConfig;
 
     /* UHD requires the input I and Q samples to be in the interval
      * [-1.0,1.0], otherwise they get truncated, which creates very
@@ -211,26 +162,24 @@ int main(int argc, char* argv[])
     OutputUHDConfig outputuhd_conf;
 #endif
 
+    modulator_data m;
+
     // To handle the timestamp offset of the modulator
-    struct modulator_offset_config modconf;
-    modconf.use_offset_file = false;
-    modconf.use_offset_fixed = false;
-    modconf.delay_calculation_pipeline_stages = 0;
+    unsigned tist_delay_stages = 0;
+    double   tist_offset_s = 0.0;
 
-    Flowgraph* flowgraph = NULL;
-    DabModulator* modulator = NULL;
-    InputMemory* input = NULL;
-    FormatConverter* format_converter = NULL;
-    ModOutput* output = NULL;
+    auto flowgraph = make_shared<Flowgraph>();
+    shared_ptr<FormatConverter> format_converter;
+    shared_ptr<ModOutput> output;
 
-    RemoteControllers rcs;
+    m.rcs = &rcs;
 
-    Logger logger;
-    InputFileReader inputFileReader(logger);
+    bool run_again = true;
+
+    InputFileReader inputFileReader;
 #if defined(HAVE_ZEROMQ)
-    InputZeroMQReader inputZeroMQReader(logger);
+    auto inputZeroMQReader = make_shared<InputZeroMQReader>();
 #endif
-    InputReader* inputReader;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(struct sigaction));
@@ -271,7 +220,7 @@ int main(int argc, char* argv[])
 #if defined(HAVE_OUTPUT_UHD)
             if (useUHDOutput) {
                 fprintf(stderr, "Options -u and -f are mutually exclusive\n");
-                goto END_MAIN;
+                throw std::invalid_argument("Invalid command line options");
             }
 #endif
             outputName = optarg;
@@ -294,25 +243,7 @@ int main(int argc, char* argv[])
             loop = true;
             break;
         case 'o':
-            if (modconf.use_offset_file)
-            {
-                fprintf(stderr, "Options -o and -O are mutually exclusive\n");
-                goto END_MAIN;
-            }
-            modconf.use_offset_fixed = true;
-            modconf.offset_fixed = strtod(optarg, NULL);
-#if defined(HAVE_OUTPUT_UHD)
-            outputuhd_conf.enableSync = true;
-#endif
-            break;
-        case 'O':
-            if (modconf.use_offset_fixed)
-            {
-                fprintf(stderr, "Options -o and -O are mutually exclusive\n");
-                goto END_MAIN;
-            }
-            modconf.use_offset_file = true;
-            modconf.offset_filename = std::string(optarg);
+            tist_offset_s = strtod(optarg, NULL);
 #if defined(HAVE_OUTPUT_UHD)
             outputuhd_conf.enableSync = true;
 #endif
@@ -330,25 +261,28 @@ int main(int argc, char* argv[])
 #if defined(HAVE_OUTPUT_UHD)
             if (useFileOutput) {
                 fprintf(stderr, "Options -u and -f are mutually exclusive\n");
-                goto END_MAIN;
+                throw std::invalid_argument("Invalid command line options");
             }
             outputuhd_conf.device = optarg;
+            outputuhd_conf.refclk_src = "internal";
+            outputuhd_conf.pps_src = "none";
+            outputuhd_conf.pps_polarity = "pos";
             useUHDOutput = 1;
 #endif
             break;
         case 'V':
             printVersion();
-            goto END_MAIN;
+            throw std::invalid_argument("");
             break;
         case '?':
         case 'h':
             printUsage(argv[0]);
-            goto END_MAIN;
+            throw std::invalid_argument("");
             break;
         default:
             fprintf(stderr, "Option '%c' not coded yet!\n", c);
             ret = -1;
-            goto END_MAIN;
+            throw std::invalid_argument("Invalid command line options");
         }
     }
 
@@ -359,18 +293,6 @@ int main(int argc, char* argv[])
             VERSION
 #endif
             << std::endl;
-
-    std::cerr << "Using FFT library " <<
-#if defined(USE_FFTW)
-        "FFTW" <<
-#endif
-#if defined(USE_KISS_FFT)
-        "Kiss FFT" <<
-#endif
-#if defined(USE_SIMD)
-        " (with fft_simd)" <<
-#endif
-        "\n";
 
     std::cerr << "Compiled with features: " <<
 #if defined(HAVE_ZEROMQ)
@@ -389,7 +311,7 @@ int main(int argc, char* argv[])
     // No argument given ? You can't be serious ! Show usage.
     if (argc == 1) {
         printUsage(argv[0]);
-        goto END_MAIN;
+        throw std::invalid_argument("Invalid command line options");
     }
 
     // If only one argument is given, interpret as configuration file name
@@ -408,8 +330,9 @@ int main(int argc, char* argv[])
         }
         catch (boost::property_tree::ini_parser::ini_parser_error &e)
         {
-            fprintf(stderr, "Error, cannot read configuration file '%s'\n", configuration_file.c_str());
-            goto END_MAIN;
+            std::cerr << "Error, cannot read configuration file '" << configuration_file.c_str() << "'" << std::endl;
+            std::cerr << "       " << e.what() << std::endl;
+            throw std::runtime_error("Cannot read configuration file");
         }
 
         // remote controller:
@@ -422,7 +345,7 @@ int main(int argc, char* argv[])
             catch (std::exception &e) {
                 std::cerr << "Error: " << e.what() << "\n";
                 std::cerr << "       telnet remote control enabled, but no telnetport defined.\n";
-                goto END_MAIN;
+                throw std::runtime_error("Configuration error");
             }
         }
 
@@ -437,7 +360,7 @@ int main(int argc, char* argv[])
             catch (std::exception &e) {
                 std::cerr << "Error: " << e.what() << "\n";
                 std::cerr << "       zmq remote control enabled, but no endpoint defined.\n";
-                goto END_MAIN;
+                throw std::runtime_error("Configuration error");
             }
         }
 #endif
@@ -448,12 +371,17 @@ int main(int argc, char* argv[])
         }
 
         inputTransport = pt.get("input.transport", "file");
+        inputMaxFramesQueued = pt.get("input.max_frames_queued",
+                ZMQ_INPUT_MAX_FRAME_QUEUE);
+        inputQueueRestartDepth = pt.get("input.restart_depth",
+                ZMQ_INPUT_QUEUE_RESTART_DEPTH);
+
         inputName = pt.get("input.source", "/dev/stdin");
 
         // log parameters:
         if (pt.get("log.syslog", 0) == 1) {
             LogToSyslog* log_syslog = new LogToSyslog();
-            logger.register_backend(log_syslog);
+            etiLog.register_backend(log_syslog);
         }
 
         if (pt.get("log.filelog", 0) == 1) {
@@ -464,11 +392,17 @@ int main(int argc, char* argv[])
             catch (std::exception &e) {
                 std::cerr << "Error: " << e.what() << "\n";
                 std::cerr << "       Configuration enables file log, but does not specify log filename\n";
-                goto END_MAIN;
+                throw std::runtime_error("Configuration error");
             }
 
             LogToFile* log_file = new LogToFile(logfilename);
-            logger.register_backend(log_file);
+            etiLog.register_backend(log_file);
+        }
+
+        auto trace_filename = pt.get<std::string>("log.trace", "");
+        if (not trace_filename.empty()) {
+            LogTracer* tracer = new LogTracer(trace_filename);
+            etiLog.register_backend(tracer);
         }
 
 
@@ -487,7 +421,7 @@ int main(int argc, char* argv[])
             catch (std::exception &e) {
                 std::cerr << "Error: " << e.what() << "\n";
                 std::cerr << "       Configuration enables firfilter, but does not specify filter taps file\n";
-                goto END_MAIN;
+                throw std::runtime_error("Configuration error");
             }
         }
 
@@ -499,7 +433,7 @@ int main(int argc, char* argv[])
         catch (std::exception &e) {
             std::cerr << "Error: " << e.what() << "\n";
             std::cerr << "       Configuration does not specify output\n";
-            goto END_MAIN;
+            throw std::runtime_error("Configuration error");
         }
 
         if (output_selected == "file") {
@@ -509,7 +443,7 @@ int main(int argc, char* argv[])
             catch (std::exception &e) {
                 std::cerr << "Error: " << e.what() << "\n";
                 std::cerr << "       Configuration does not specify file name for file output\n";
-                goto END_MAIN;
+                throw std::runtime_error("Configuration error");
             }
             useFileOutput = 1;
 
@@ -535,11 +469,11 @@ int main(int argc, char* argv[])
             outputuhd_conf.txgain = pt.get("uhdoutput.txgain", 0.0);
             outputuhd_conf.frequency = pt.get<double>("uhdoutput.frequency", 0);
             std::string chan = pt.get<std::string>("uhdoutput.channel", "");
-			outputuhd_conf.dabMode = dabMode;
+            outputuhd_conf.dabMode = dabMode;
 
             if (outputuhd_conf.frequency == 0 && chan == "") {
                 std::cerr << "       UHD output enabled, but neither frequency nor channel defined.\n";
-                goto END_MAIN;
+                throw std::runtime_error("Configuration error");
             }
             else if (outputuhd_conf.frequency == 0) {
                 double freq;
@@ -583,18 +517,18 @@ int main(int argc, char* argv[])
                 else if (chan == "13F") freq = 239200000;
                 else {
                     std::cerr << "       UHD output: channel " << chan << " does not exist in table\n";
-                    goto END_MAIN;
+                    throw std::out_of_range("UHD channel selection error");
                 }
                 outputuhd_conf.frequency = freq;
             }
             else if (outputuhd_conf.frequency != 0 && chan != "") {
                 std::cerr << "       UHD output: cannot define both frequency and channel.\n";
-                goto END_MAIN;
+                throw std::runtime_error("Configuration error");
             }
 
 
-            outputuhd_conf.refclk_src = pt.get("uhdoutput.refclk_source", "int");
-            outputuhd_conf.pps_src = pt.get("uhdoutput.pps_source", "int");
+            outputuhd_conf.refclk_src = pt.get("uhdoutput.refclk_source", "internal");
+            outputuhd_conf.pps_src = pt.get("uhdoutput.pps_source", "none");
             outputuhd_conf.pps_polarity = pt.get("uhdoutput.pps_polarity", "pos");
 
             std::string behave = pt.get("uhdoutput.behaviour_refclk_lock_lost", "ignore");
@@ -607,8 +541,10 @@ int main(int argc, char* argv[])
             }
             else {
                 std::cerr << "Error: UHD output: behaviour_refclk_lock_lost invalid." << std::endl;
-                goto END_MAIN;
+                throw std::runtime_error("Configuration error");
             }
+
+            outputuhd_conf.maxGPSHoldoverTime = pt.get("uhdoutput.max_gps_holdover_time", 0);
 
             useUHDOutput = 1;
         }
@@ -616,60 +552,63 @@ int main(int argc, char* argv[])
 #if defined(HAVE_ZEROMQ)
         else if (output_selected == "zmq") {
             outputName = pt.get<std::string>("zmqoutput.listen");
+            zmqOutputSocketType = pt.get<std::string>("zmqoutput.socket_type");
             useZeroMQOutput = 1;
         }
 #endif
         else {
             std::cerr << "Error: Invalid output defined.\n";
-            goto END_MAIN;
+            throw std::runtime_error("Configuration error");
         }
 
 #if defined(HAVE_OUTPUT_UHD)
         outputuhd_conf.enableSync = (pt.get("delaymanagement.synchronous", 0) == 1);
         if (outputuhd_conf.enableSync) {
+            std::string delay_mgmt = pt.get<std::string>("delaymanagement.management", "");
+            std::string fixedoffset = pt.get<std::string>("delaymanagement.fixedoffset", "");
+            std::string offset_filename = pt.get<std::string>("delaymanagement.dynamicoffsetfile", "");
+
+            if (not(delay_mgmt.empty() and fixedoffset.empty() and offset_filename.empty())) {
+                std::cerr << "Warning: you are using the old config syntax for the offset management.\n";
+                std::cerr << "         Please see the example.ini configuration for the new settings.\n";
+            }
+
             try {
-                std::string delay_mgmt = pt.get<std::string>("delaymanagement.management");
-                if (delay_mgmt == "fixed") {
-                    modconf.offset_fixed = pt.get<double>("delaymanagement.fixedoffset");
-                    modconf.use_offset_fixed = true;
-                }
-                else if (delay_mgmt == "dynamic") {
-                    modconf.offset_filename = pt.get<std::string>("delaymanagement.dynamicoffsetfile");
-                    modconf.use_offset_file = true;
-                }
-                else {
-                    throw std::runtime_error("invalid management value");
-                }
+                tist_offset_s = pt.get<double>("delaymanagement.offset");
             }
             catch (std::exception &e) {
-                std::cerr << "Error: " << e.what() << "\n";
-                std::cerr << "       Synchronised transmission enabled, but delay management specification is incomplete.\n";
-                goto END_MAIN;
+                std::cerr << "Error: delaymanagement: synchronous is enabled, but no offset defined!\n";
+                throw std::runtime_error("Configuration error");
             }
         }
 
         outputuhd_conf.muteNoTimestamps = (pt.get("delaymanagement.mutenotimestamps", 0) == 1);
 #endif
+
+        /* Read TII parameters from config file */
+        tiiConfig.enable  = pt.get("tii.enable", 0);
+        tiiConfig.comb    = pt.get("tii.comb", 0);
+        tiiConfig.pattern = pt.get("tii.pattern", 0);
     }
 
     if (rcs.get_no_controllers() == 0) {
-        logger.level(warn) << "No Remote-Control started";
+        etiLog.level(warn) << "No Remote-Control started";
         rcs.add_controller(new RemoteControllerDummy());
     }
 
 
-    logger.level(info) << "Starting up";
+    etiLog.level(info) << "Starting up version " <<
+#if defined(GITVERSION)
+            GITVERSION;
+#else
+            VERSION;
+#endif
 
-    if (!(modconf.use_offset_file || modconf.use_offset_fixed)) {
-        logger.level(debug) << "No Modulator offset defined, setting to 0";
-        modconf.use_offset_fixed = true;
-        modconf.offset_fixed = 0;
-    }
 
     // When using the FIRFilter, increase the modulator offset pipelining delay
     // by the correct amount
     if (filterTapsFilename != "") {
-        modconf.delay_calculation_pipeline_stages += FIRFILTER_PIPELINE_DELAY;
+        tist_delay_stages += FIRFILTER_PIPELINE_DELAY;
     }
 
     // Setting ETI input filename
@@ -697,14 +636,14 @@ int main(int argc, char* argv[])
         fprintf(stderr, "\n");
         printUsage(argv[0]);
         ret = -1;
-        logger.level(error) << "Received invalid command line arguments";
-        goto END_MAIN;
+        etiLog.level(error) << "Received invalid command line arguments";
+        throw std::invalid_argument("Invalid command line options");
     }
 
     if (!useFileOutput && !useUHDOutput && !useZeroMQOutput) {
-        logger.level(error) << "Output not specified";
+        etiLog.level(error) << "Output not specified";
         fprintf(stderr, "Must specify output !");
-        goto END_MAIN;
+        throw std::runtime_error("Configuration error");
     }
 
     // Print settings
@@ -721,16 +660,22 @@ int main(int argc, char* argv[])
         fprintf(stderr, " UHD\n"
                         "  Device: %s\n"
                         "  Type: %s\n"
-                        "  master_clock_rate: %ld\n",
+                        "  master_clock_rate: %ld\n"
+                        "  refclk: %s\n"
+                        "  pps source: %s\n",
                 outputuhd_conf.device.c_str(),
                 outputuhd_conf.usrpType.c_str(),
-                outputuhd_conf.masterClockRate);
+                outputuhd_conf.masterClockRate,
+                outputuhd_conf.refclk_src.c_str(),
+                outputuhd_conf.pps_src.c_str());
     }
 #endif
     else if (useZeroMQOutput) {
         fprintf(stderr, " ZeroMQ\n"
-                        "  Listening on: %s\n",
-                        outputName.c_str());
+                        "  Listening on: %s\n"
+                        "  Socket type : %s\n",
+                        outputName.c_str(),
+                        zmqOutputSocketType.c_str());
     }
 
     fprintf(stderr, "  Sampling rate: ");
@@ -748,96 +693,166 @@ int main(int argc, char* argv[])
         // Opening ETI input file
         if (inputFileReader.Open(inputName, loop) == -1) {
             fprintf(stderr, "Unable to open input file!\n");
-            logger.level(error) << "Unable to open input file!";
+            etiLog.level(error) << "Unable to open input file!";
             ret = -1;
-            goto END_MAIN;
+            throw std::runtime_error("Unable to open input");
         }
 
-        inputReader = &inputFileReader;
+        m.inputReader = &inputFileReader;
     }
     else if (inputTransport == "zeromq") {
 #if !defined(HAVE_ZEROMQ)
         fprintf(stderr, "Error, ZeroMQ input transport selected, but not compiled in!\n");
         ret = -1;
-        goto END_MAIN;
+        throw std::runtime_error("Unable to open input");
 #else
-        // The URL might start with zmq+tcp://
-        if (inputName.substr(0, 4) == "zmq+") {
-            inputZeroMQReader.Open(inputName.substr(4));
-        }
-        else {
-            inputZeroMQReader.Open(inputName);
-        }
-        inputReader = &inputZeroMQReader;
+        inputZeroMQReader->Open(inputName, inputMaxFramesQueued, inputQueueRestartDepth);
+        m.inputReader = inputZeroMQReader.get();
 #endif
     }
     else
     {
         fprintf(stderr, "Error, invalid input transport %s selected!\n", inputTransport.c_str());
         ret = -1;
-        goto END_MAIN;
+        throw std::runtime_error("Unable to open input");
     }
 
     if (useFileOutput) {
         if (fileOutputFormat == "complexf") {
-            output = new OutputFile(outputName);
+            output = make_shared<OutputFile>(outputName);
         }
         else if (fileOutputFormat == "s8") {
             // We must normalise the samples to the interval [-127.0; 127.0]
             normalise = 127.0f / normalise_factor;
 
-            format_converter = new FormatConverter();
+            format_converter = make_shared<FormatConverter>();
 
-            output = new OutputFile(outputName);
+            output = make_shared<OutputFile>(outputName);
         }
     }
 #if defined(HAVE_OUTPUT_UHD)
     else if (useUHDOutput) {
-
         normalise = 1.0f / normalise_factor;
-
         outputuhd_conf.sampleRate = outputRate;
-        try {
-            output = new OutputUHD(outputuhd_conf, logger);
-            ((OutputUHD*)output)->enrol_at(rcs);
-        }
-        catch (std::exception& e) {
-            logger.level(error) << "UHD initialisation failed:" << e.what();
-            goto END_MAIN;
-        }
+        output = make_shared<OutputUHD>(outputuhd_conf);
+        ((OutputUHD*)output.get())->enrol_at(rcs);
     }
 #endif
 #if defined(HAVE_ZEROMQ)
     else if (useZeroMQOutput) {
         /* We normalise the same way as for the UHD output */
         normalise = 1.0f / normalise_factor;
-
-        output = new OutputZeroMQ(outputName);
+        if (zmqOutputSocketType == "pub") {
+            output = make_shared<OutputZeroMQ>(outputName, ZMQ_PUB);
+        }
+        else if (zmqOutputSocketType == "rep") {
+            output = make_shared<OutputZeroMQ>(outputName, ZMQ_REP);
+        }
+        else {
+            std::stringstream ss;
+            ss << "ZeroMQ output socket type " << zmqOutputSocketType << " invalid";
+            throw std::invalid_argument(ss.str());
+        }
     }
 #endif
 
-    flowgraph = new Flowgraph();
-    data.setLength(6144);
-    input = new InputMemory(&data);
-    modulator = new DabModulator(modconf, &rcs, logger, outputRate, clockRate,
-            dabMode, gainMode, digitalgain, normalise, filterTapsFilename);
-    flowgraph->connect(input, modulator);
-    if (format_converter) {
-        flowgraph->connect(modulator, format_converter);
-        flowgraph->connect(format_converter, output);
+    // Set thread priority to realtime
+    if (int r = set_realtime_prio(1)) {
+        etiLog.level(error) << "Could not set priority for modulator:" << r;
     }
-    else {
-        flowgraph->connect(modulator, output);
-    }
+    set_thread_name("modulator");
+
+    while (run_again) {
+        Flowgraph flowgraph;
+
+        m.flowgraph = &flowgraph;
+        m.data.setLength(6144);
+
+        shared_ptr<InputMemory> input(new InputMemory(&m.data));
+        shared_ptr<DabModulator> modulator(
+                new DabModulator(tist_offset_s, tist_delay_stages, &rcs,
+                    tiiConfig, outputRate, clockRate, dabMode, gainMode,
+                    digitalgain, normalise, filterTapsFilename));
+
+        flowgraph.connect(input, modulator);
+        if (format_converter) {
+            flowgraph.connect(modulator, format_converter);
+            flowgraph.connect(format_converter, output);
+        }
+        else {
+            flowgraph.connect(modulator, output);
+        }
 
 #if defined(HAVE_OUTPUT_UHD)
-    if (useUHDOutput) {
-        ((OutputUHD*)output)->setETIReader(modulator->getEtiReader());
-    }
+        if (useUHDOutput) {
+            ((OutputUHD*)output.get())->setETIReader(modulator->getEtiReader());
+        }
 #endif
 
-    inputReader->PrintInfo();
+        m.inputReader->PrintInfo();
 
+        run_modulator_state_t st = run_modulator(m);
+        etiLog.log(trace, "DABMOD,run_modulator() = %d", st);
+
+        switch (st) {
+            case run_modulator_state_t::failure:
+                etiLog.level(error) << "Modulator failure.";
+                run_again = false;
+                ret = 1;
+                break;
+            case run_modulator_state_t::again:
+                etiLog.level(warn) << "Restart modulator.";
+                run_again = false;
+                if (inputTransport == "file") {
+                    if (inputFileReader.Open(inputName, loop) == -1) {
+                        etiLog.level(error) << "Unable to open input file!";
+                        ret = 1;
+                    }
+                    else {
+                        run_again = true;
+                    }
+                }
+                else if (inputTransport == "zeromq") {
+#if defined(HAVE_ZEROMQ)
+                    run_again = true;
+                    // Create a new input reader
+                    inputZeroMQReader = make_shared<InputZeroMQReader>();
+                    inputZeroMQReader->Open(inputName, inputMaxFramesQueued, inputQueueRestartDepth);
+                    m.inputReader = inputZeroMQReader.get();
+#endif
+                }
+                break;
+            case run_modulator_state_t::reconfigure:
+                etiLog.level(warn) << "Detected change in ensemble configuration.";
+                /* We can keep the input in this care */
+                run_again = true;
+                break;
+            case run_modulator_state_t::normal_end:
+            default:
+                etiLog.level(info) << "modulator stopped.";
+                ret = 0;
+                run_again = false;
+                break;
+        }
+
+        fprintf(stderr, "\n\n");
+        etiLog.level(info) << m.framecount << " DAB frames encoded";
+        etiLog.level(info) << ((float)m.framecount * 0.024f) << " seconds encoded";
+
+        m.data.setLength(0);
+    }
+
+    ////////////////////////////////////////////////////////////////////////
+    // Cleaning things
+    ////////////////////////////////////////////////////////////////////////
+
+    etiLog.level(info) << "Terminating";
+    return ret;
+}
+
+run_modulator_state_t run_modulator(modulator_data& m)
+{
+    auto ret = run_modulator_state_t::failure;
     try {
         while (running) {
 
@@ -846,57 +861,68 @@ int main(int argc, char* argv[])
             PDEBUG("*****************************************\n");
             PDEBUG("* Starting main loop\n");
             PDEBUG("*****************************************\n");
-            while ((framesize = inputReader->GetNextFrame(data.getData())) > 0) {
+            while ((framesize = m.inputReader->GetNextFrame(m.data.getData())) > 0) {
                 if (!running) {
                     break;
                 }
 
-                frame++;
+                m.framecount++;
 
                 PDEBUG("*****************************************\n");
-                PDEBUG("* Read frame %lu\n", frame);
+                PDEBUG("* Read frame %lu\n", m.framecount);
                 PDEBUG("*****************************************\n");
 
                 ////////////////////////////////////////////////////////////////
-                // Proccessing data
+                // Processing data
                 ////////////////////////////////////////////////////////////////
-                flowgraph->run();
+                m.flowgraph->run();
 
                 /* Check every once in a while if the remote control
                  * is still working */
-                if (rcs.get_no_controllers() > 0 && (frame % 250) == 0) {
-                    rcs.check_faults();
+                if (m.rcs->get_no_controllers() > 0 && (m.framecount % 250) == 0) {
+                    m.rcs->check_faults();
                 }
             }
             if (framesize == 0) {
-                fprintf(stderr, "End of file reached.\n");
+                etiLog.level(info) << "End of file reached.";
             }
             else {
-                fprintf(stderr, "Input read error.\n");
+                etiLog.level(error) << "Input read error.";
             }
             running = 0;
+            ret = run_modulator_state_t::normal_end;
         }
+    } catch (zmq_input_overflow& e) {
+        // The ZeroMQ input has overflowed its buffer
+        etiLog.level(warn) << e.what();
+        ret = run_modulator_state_t::again;
+    } catch (std::out_of_range& e) {
+        // One of the DSP blocks has detected an invalid change
+        // or value in some settings. This can be due to a multiplex
+        // reconfiguration.
+        etiLog.level(warn) << e.what();
+        ret = run_modulator_state_t::reconfigure;
     } catch (std::exception& e) {
-        fprintf(stderr, "EXCEPTION: %s\n", e.what());
-        ret = -1;
+        etiLog.level(error) << "Exception caught: " << e.what();
+        ret = run_modulator_state_t::failure;
     }
 
-END_MAIN:
-    ////////////////////////////////////////////////////////////////////////
-    // Cleaning things
-    ////////////////////////////////////////////////////////////////////////
-    fprintf(stderr, "\n\n");
-    fprintf(stderr, "%lu DAB frames encoded\n", frame);
-    fprintf(stderr, "%f seconds encoded\n", (float)frame * 0.024f);
-
-    fprintf(stderr, "\nCleaning flowgraph...\n");
-    delete flowgraph;
-
-    // Cif
-    fprintf(stderr, "\nCleaning buffers...\n");
-
-    logger.level(info) << "Terminating";
-
     return ret;
+}
+
+int main(int argc, char* argv[])
+{
+    try {
+        return launch_modulator(argc, argv);
+    }
+    catch (std::invalid_argument& e) {
+        std::string what(e.what());
+        if (not what.empty()) {
+            std::cerr << "Modulator error: " << what << std::endl;
+        }
+    }
+    catch (std::runtime_error& e) {
+        std::cerr << "Modulator runtime error: " << e.what() << std::endl;
+    }
 }
 
