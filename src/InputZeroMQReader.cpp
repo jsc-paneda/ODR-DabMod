@@ -212,7 +212,7 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                 workerdata->in_messages->notify();
 
                 if (!buffer_full) {
-                    etiLog.level(warn) << "ZeroMQ buffer overfull !";
+                    etiLog.level(warn) << "ZMQ,ZeroMQ buffer overfull !";
 
                     buffer_full = true;
 
@@ -229,18 +229,18 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                 //m_to_drop = 3;
                 if(workerdata->restart_queue_depth != 0)
                 {
-                    etiLog.level(warn) << "resetting ZeroMQ buffer to: " << workerdata->restart_queue_depth;
-                    m_to_drop = workerdata->max_queued_frames - workerdata->restart_queue_depth;
+                    etiLog.level(warn) << "ZMQ,resetting ZeroMQ buffer to: " << workerdata->restart_queue_depth;
+                    m_to_drop = (workerdata->max_queued_frames - workerdata->restart_queue_depth) / 2;
                 }
                 else
                 {
-                    etiLog.level(warn) << "resetting ZeroMQ buffer to: " << workerdata->max_queued_frames / 2;
+                    etiLog.level(warn) << "ZMQ,resetting ZeroMQ buffer to: " << workerdata->max_queued_frames / 2;
                     m_to_drop = workerdata->max_queued_frames / 2;
                 }
             }
 
             if (queue_size < 5) {
-                etiLog.level(warn) << "ZeroMQ buffer low: " << queue_size << " elements !";
+                etiLog.level(warn) << "ZMQ,ZeroMQ buffer low: " << queue_size << " elements !";
             }
         }
     }
