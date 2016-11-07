@@ -230,12 +230,12 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                 if(workerdata->restart_queue_depth != 0)
                 {
                     etiLog.level(warn) << "ZMQ,resetting ZeroMQ buffer to: " << workerdata->restart_queue_depth;
-                    m_to_drop = (workerdata->max_queued_frames - workerdata->restart_queue_depth) / 2;
+                    m_to_drop = (workerdata->max_queued_frames - workerdata->restart_queue_depth) / 4;
                 }
                 else
                 {
                     etiLog.level(warn) << "ZMQ,resetting ZeroMQ buffer to: " << workerdata->max_queued_frames / 2;
-                    m_to_drop = workerdata->max_queued_frames / 2;
+                    m_to_drop = workerdata->max_queued_frames / 4;
                 }
             }
 
