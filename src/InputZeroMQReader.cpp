@@ -221,35 +221,35 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
 
                 queue_size = workerdata->in_messages->size();
 
-                /* Drop three more incoming ETI frames before
-                 * we start accepting them again, to guarantee
-                 * that we keep transmission frame vs. ETI frame
-                 * phase.
-                 */
+                // /* Drop three more incoming ETI frames before
+                 // * we start accepting them again, to guarantee
+                 // * that we keep transmission frame vs. ETI frame
+                 // * phase.
+                 // */
                 //m_to_drop = 3;
-                if(workerdata->restart_queue_depth != 0)
+
+                // Make sure we drop a multiple of 8 frames. 
+                // There are 4 in each ZMQ-msg, with NUM_FRAMES_PER_ZMQ_MESSAGE = 4 as default.
+                // We drop the current msg with 4 frames and need to drop another to keep phase.
+                // Plus the amount we need to reach wanted start depth.
+                m_to_drop = (8 / NUM_FRAMES_PER_ZMQ_MESSAGE) - 1; // To keep frame phase for all modes.
+
+                // Add amount of frames to reach wanted depth in a multiple of 8.
+                if(workerdata->restart_queue_depth != 0) // We have a restart_queue_depth value defined.
                 {
-                    etiLog.level(warn) << "resetting ZeroMQ buffer to: " << workerdata->restart_queue_depth;
-                    m_to_drop = (workerdata->max_queued_frames - workerdata->restart_queue_depth) / 4;
+                    m_to_drop += ((workerdata->max_queued_frames - workerdata->restart_queue_depth) / 8) * (8 / NUM_FRAMES_PER_ZMQ_MESSAGE);
                 }
-                else
+                else // We use half the max_queued_frames as default restart value when restart_queue_depth isn't defined.
                 {
-                    etiLog.level(warn) << "resetting ZeroMQ buffer to: " << workerdata->max_queued_frames / 2;
-                    m_to_drop = workerdata->max_queued_frames / 4;
+                    m_to_drop += ((workerdata->max_queued_frames / 2) / 8) * (8 / NUM_FRAMES_PER_ZMQ_MESSAGE);
                 }
-                if(m_to_drop != 0)
+
+                if(m_to_drop % (8 / NUM_FRAMES_PER_ZMQ_MESSAGE) == 0)
                 {
-                    /* Make sure we drop a multiple of 8 frames. 
-                     * There are 4 in each ZMQ-msg, and we drop the 
-                     * current msg with 4 frames.
-                     */
-                    if(m_to_drop % 2 == 0)
+                    --m_to_drop;
+                    if(m_to_drop < 0)
                     {
-                        --m_to_drop;
-                        if(m_to_drop < 0)
-                        {
-                            m_to_drop = 0;
-                        }
+                        m_to_drop = 0;
                     }
                 }
             }
