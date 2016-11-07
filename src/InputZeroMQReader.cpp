@@ -212,7 +212,7 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                 workerdata->in_messages->notify();
 
                 if (!buffer_full) {
-                    etiLog.level(warn) << "ZMQ,ZeroMQ buffer overfull !";
+                    etiLog.level(warn) << "ZeroMQ buffer overflow!";
 
                     buffer_full = true;
 
@@ -229,13 +229,28 @@ void InputZeroMQWorker::RecvProcess(struct InputZeroMQThreadData* workerdata)
                 //m_to_drop = 3;
                 if(workerdata->restart_queue_depth != 0)
                 {
-                    etiLog.level(warn) << "ZMQ,resetting ZeroMQ buffer to: " << workerdata->restart_queue_depth;
+                    etiLog.level(warn) << "resetting ZeroMQ buffer to: " << workerdata->restart_queue_depth;
                     m_to_drop = (workerdata->max_queued_frames - workerdata->restart_queue_depth) / 4;
                 }
                 else
                 {
-                    etiLog.level(warn) << "ZMQ,resetting ZeroMQ buffer to: " << workerdata->max_queued_frames / 2;
+                    etiLog.level(warn) << "resetting ZeroMQ buffer to: " << workerdata->max_queued_frames / 2;
                     m_to_drop = workerdata->max_queued_frames / 4;
+                }
+                if(m_to_drop != 0)
+                {
+                    /* Make sure we drop a multiple of 8 frames. 
+                     * There are 4 in each ZMQ-msg, and we drop the 
+                     * current msg with 4 frames.
+                     */
+                    if(m_to_drop % 2 == 0)
+                    {
+                        --m_to_drop;
+                        if(m_to_drop < 0)
+                        {
+                            m_to_drop = 0;
+                        }
+                    }
                 }
             }
 
