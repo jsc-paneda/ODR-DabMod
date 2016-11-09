@@ -2,7 +2,7 @@
    Copyright (C) 2005, 2006, 2007, 2008, 2009, 2010, 2011 Her Majesty
    the Queen in Right of Canada (Communications Research Center Canada)
 
-   Copyright (C) 2014
+   Copyright (C) 2016
    Matthias P. Braendli, matthias.braendli@mpb.li
 
     http://opendigitalradio.org
@@ -39,11 +39,8 @@ extern "C" {
 #  include "gpu_fft.h"
 #  include "mailbox.h"
 }
-#elif USE_FFTW
-#  include "fftw3.h"
 #else
-#  include "kiss_fftsimd.h"
-#  include <kiss_fft.h>
+#include "fftw3.h"
 #endif
 
 #include <sys/types.h>
@@ -66,12 +63,9 @@ protected:
     int mailBox;
     struct GPU_FFT *fft;
     void* myFftPlan;
-#elif USE_FFTW
+#else
     fftwf_plan myFftPlan;
     fftwf_complex *myFftIn, *myFftOut;
-#else
-    FFT_PLAN myFftPlan;
-    FFT_TYPE *myFftBuffer;
 #endif
     
     size_t myNbSymbols;

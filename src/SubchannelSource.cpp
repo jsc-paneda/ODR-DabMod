@@ -64,7 +64,8 @@ SubchannelSource::SubchannelSource(eti_STC &stc) :
     ModInput(ModFormat(0), ModFormat(stc.getSTL() * 8)),
     d_start_address(stc.getStartAddress()),
     d_framesize(stc.getSTL() * 8),
-    d_protection(stc.TPL)
+    d_protection(stc.TPL),
+	d_scid(stc.SCID)
 {
     PDEBUG("SubchannelSource::SubchannelSource(...) @ %p\n", this);
 //    PDEBUG("  Start address: %i\n", d_start_address);
@@ -1018,8 +1019,8 @@ size_t SubchannelSource::bitrate()
 {
     return d_framesize / 3;
 }
-    
-    
+
+
 size_t SubchannelSource::protection()
 {
     return d_protection;
@@ -1050,12 +1051,18 @@ size_t SubchannelSource::protectionOption()
 }
 
 
+size_t SubchannelSource::scid()
+{
+    return d_scid;
+}
+
+
 int SubchannelSource::process(Buffer* inputData, Buffer* outputData)
 {
     PDEBUG("SubchannelSource::process"
             "(inputData: %p, outputData: %p)\n",
             inputData, outputData);
-    
+
     if (inputData != NULL && inputData->getLength()) {
         PDEBUG(" Input, storing data\n");
         if (inputData->getLength() != d_framesize) {
@@ -1066,7 +1073,7 @@ int SubchannelSource::process(Buffer* inputData, Buffer* outputData)
         return inputData->getLength();
     }
     PDEBUG(" Output, retriving data\n");
-    
+
     return read(outputData);
 }
 
@@ -1075,12 +1082,12 @@ int SubchannelSource::read(Buffer* outputData)
 {
     PDEBUG("SubchannelSource::read(outputData: %p, outputSize: %zu)\n",
             outputData, outputData->getLength());
-    
+
     if (d_buffer.getLength() != d_framesize) {
         PDEBUG("ERROR: Subchannel::read.outputSize != d_framesize\n");
         exit(-1);
     }
     *outputData = d_buffer;
-    
+
     return outputData->getLength();
 }

@@ -29,17 +29,29 @@
 
 typedef std::complex<float> complexf;
 
-
-const unsigned char PhaseReference::d_h[4][32] = {
-    { 0, 2, 0, 0, 0, 0, 1, 1, 2, 0, 0, 0, 2, 2, 1, 1,
+/* ETSI EN 300 401 Table 43 (Clause 14.3.2)
+ * Contains h_{i,k} values
+ */
+const uint8_t PhaseReference::d_h[4][32] = {
+    /* h0 */ { 0, 2, 0, 0, 0, 0, 1, 1, 2, 0, 0, 0, 2, 2, 1, 1,
         0, 2, 0, 0, 0, 0, 1, 1, 2, 0, 0, 0, 2, 2, 1, 1 },
-    { 0, 3, 2, 3, 0, 1, 3, 0, 2, 1, 2, 3, 2, 3, 3, 0, 
+    /* h1 */ { 0, 3, 2, 3, 0, 1, 3, 0, 2, 1, 2, 3, 2, 3, 3, 0,
         0, 3, 2, 3, 0, 1, 3, 0, 2, 1, 2, 3, 2, 3, 3, 0 },
-    { 0, 0, 0, 2, 0, 2, 1, 3, 2, 2, 0, 2, 2, 0, 1, 3,
+    /* h2 */ { 0, 0, 0, 2, 0, 2, 1, 3, 2, 2, 0, 2, 2, 0, 1, 3,
         0, 0, 0, 2, 0, 2, 1, 3, 2, 2, 0, 2, 2, 0, 1, 3 },
-    { 0, 1, 2, 1, 0, 3, 3, 2, 2, 3, 2, 1, 2, 1, 3, 2,
+    /* h3 */  { 0, 1, 2, 1, 0, 3, 3, 2, 2, 3, 2, 1, 2, 1, 3, 2,
         0, 1, 2, 1, 0, 3, 3, 2, 2, 3, 2, 1, 2, 1, 3, 2 }
 };
+
+/* EN 300 401, Clause 14.3.2:
+ * \phi_k = (\pi / 2) * (h_{i,k-k'} + n
+ *
+ * where "The indices i, k' and the parameter n are specified as functions of
+ * the carrier index k for the four transmission modes in tables 44 to 47."
+ *
+ * Tables 44 to 47 describe the frequency interleaving done in
+ * FrequencyInterleaver.
+ */
 
 
 PhaseReference::PhaseReference(unsigned int dabmode) :
@@ -71,7 +83,7 @@ PhaseReference::PhaseReference(unsigned int dabmode) :
         throw std::runtime_error(
                 "PhaseReference::PhaseReference DAB mode not valid!");
     }
-    d_dataIn = new complexf[d_num];
+    d_dataIn.resize(d_carriers);
     fillData();
 
     myOutputFormat.size(d_carriers * sizeof(complexf));
@@ -81,12 +93,10 @@ PhaseReference::PhaseReference(unsigned int dabmode) :
 PhaseReference::~PhaseReference()
 {
     PDEBUG("PhaseReference::~PhaseReference() @ %p\n", this);
-
-    delete[] d_dataIn;
 }
 
 
-complexf convert(unsigned char data) {
+complexf convert(uint8_t data) {
     const complexf value[] = {
         complexf(1, 0),
         complexf(0, 1),
@@ -143,7 +153,12 @@ void PhaseReference::fillData()
                 "PhaseReference::fillData invalid DAB mode!");
     }
 
-    for (index = 0, offset = 0; index < d_carriers; ++offset) {
+    if (d_dataIn.size() != d_carriers) {
+        throw std::runtime_error(
+                "PhaseReference::fillData d_dataIn has incorrect size!");
+    }
+
+    for (index = 0, offset = 0; index < d_dataIn.size(); ++offset) {
         for (k = 0; k < 32; ++k) {
             d_dataIn[index++] = convert(d_h[table[d_dabmode][offset][0]][k]
                     + table[d_dabmode][offset][1]);
@@ -162,7 +177,8 @@ int PhaseReference::process(Buffer* const dataIn, Buffer* dataOut)
                 "PhaseReference::process input size not valid!");
     }
 
-    dataOut->setData(d_dataIn, d_carriers * sizeof(complexf));
+    dataOut->setData(&d_dataIn[0], d_carriers * sizeof(complexf));
 
     return 1;
 }
+

@@ -60,28 +60,34 @@ int FrameMultiplexer::process(std::vector<Buffer*> dataIn, Buffer* dataOut)
 
 #ifdef DEBUG
     fprintf(stderr, "FrameMultiplexer::process(dataIn:");
-    for (unsigned i = 0; i < dataIn.size(); ++i) {
+    for (size_t i = 0; i < dataIn.size(); ++i) {
         fprintf(stderr, " %p", dataIn[i]);
     }
     fprintf(stderr, ", sizeIn:");
-    for (unsigned i = 0; i < dataIn.size(); ++i) {
+    for (size_t i = 0; i < dataIn.size(); ++i) {
         fprintf(stderr, " %zu", dataIn[i]->getLength());
     }
     fprintf(stderr, ", dataOut: %p, sizeOut: %zu)\n", dataOut, dataOut->getLength());
 #endif
 
-    unsigned char* out = reinterpret_cast<unsigned char*>(dataOut->getData());
+    uint8_t* out = reinterpret_cast<uint8_t*>(dataOut->getData());
     std::vector<Buffer*>::const_iterator in = dataIn.begin();
 
     // Write PRBS
     memcpy(out, (*in)->getData(), (*in)->getLength());
     ++in;
     // Write subchannel
-    assert(mySubchannels->size() == dataIn.size() - 1);
+    if (mySubchannels->size() != dataIn.size() - 1) {
+        throw std::out_of_range(
+                "FrameMultiplexer detected subchannel size change!");
+    }
     std::vector<std::shared_ptr<SubchannelSource> >::const_iterator subchannel =
         mySubchannels->begin();
     while (in != dataIn.end()) {
-        assert((*subchannel)->framesizeCu() * 8 == (*in)->getLength());
+        if ((*subchannel)->framesizeCu() * 8 != (*in)->getLength()) {
+            throw std::out_of_range(
+                    "FrameMultiplexer detected invalid subchannel size!");
+        }
         size_t offset = (*subchannel)->startAddress() * 8;
         memcpy(&out[offset], (*in)->getData(), (*in)->getLength());
         ++in;
